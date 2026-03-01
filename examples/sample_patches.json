@@ -1,0 +1,22 @@
+{
+  "patches": [
+    {
+      "id": 0,
+      "address": "0x001000",
+      "data": "ffffffffffffffff",
+      "enabled": true
+    },
+    {
+      "id": 1,
+      "address": "0x002000",
+      "data": "0011223344556677",
+      "enabled": true
+    },
+    {
+      "id": 2,
+      "address": "0x003000",
+      "data": "deadbeefcafebabe",
+      "enabled": false
+    }
+  ]
+}
