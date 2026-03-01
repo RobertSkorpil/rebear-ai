@@ -119,19 +119,36 @@ rebear-gui
 
 ### System Overview
 
+**CRITICAL**: The Flash chip has been physically unsoldered from the teddy bear PCB and rewired through a breakout board. The FPGA sits as a complete intermediary - all communication flows through it.
+
 ```
 ┌─────────────┐         ┌──────────────┐         ┌─────────────┐
-│   Teddy     │  SPI    │    FPGA      │  SPI    │ Raspberry   │
-│   Bear MCU  │◄───────►│  (Tap/Patch) │◄───────►│   Pi 3      │
+│   Teddy     │  SPI    │    FPGA      │  SPI    │   Flash     │
+│   Bear MCU  │◄───────►│ (Pass-thru + │◄───────►│   Memory    │
+│             │         │   Monitor)   │         │ (Breakout)  │
 └─────────────┘         └──────────────┘         └─────────────┘
-       │                       │                        │
-       │ SPI                   │ Monitors &             │ GPIO
-       ▼                       │ Modifies               ▼
-┌─────────────┐               │                  ┌──────────┐
-│   Flash     │◄──────────────┘                  │  Button  │
-│   Memory    │                                   │  Ready   │
-└─────────────┘                                   └──────────┘
+       │                       │
+       │ GPIO                  │ SPI
+       │ (Button)              │
+       │                       ▼
+       │                ┌─────────────┐
+       └───────────────►│ Raspberry   │
+                        │   Pi 3      │
+                        │  (Control)  │
+                        └─────────────┘
+                               │
+                               │ GPIO
+                               ▼
+                        ┌──────────┐
+                        │  Buffer  │
+                        │  Ready   │
+                        └──────────┘
 ```
+
+**Signal Flow**:
+- **MOSI (MCU→FPGA→Flash)**: Pass-through with monitoring - records transaction addresses
+- **MISO (Flash→FPGA→MCU)**: Pass-through with optional modification - patches data in real-time
+- **Flash memory is NEVER modified** - only the data stream is altered
 
 ### Key Components
 
