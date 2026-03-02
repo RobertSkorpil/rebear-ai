@@ -673,14 +673,29 @@ void MainWindow::onButtonPress()
 {
     if (!isConnected_) return;
     
-    if (buttonControl_->press()) {
+    bool success = false;
+    std::string error;
+    
+    if (useNetwork_) {
+        if (buttonNetwork_) {
+            success = buttonNetwork_->write(true);
+            error = buttonNetwork_->getLastError();
+        }
+    } else {
+        if (buttonControl_) {
+            success = buttonControl_->press();
+            error = buttonControl_->getLastError();
+        }
+    }
+    
+    if (success) {
         updateStatusBar("Button pressed");
         logMessage("Button pressed (GPIO 3 HIGH)");
         emit buttonPressed();
     } else {
         QMessageBox::warning(this, "Button Control Failed",
                            QString("Failed to press button:\n%1")
-                           .arg(QString::fromStdString(buttonControl_->getLastError())));
+                           .arg(QString::fromStdString(error)));
     }
 }
 
@@ -688,14 +703,29 @@ void MainWindow::onButtonRelease()
 {
     if (!isConnected_) return;
     
-    if (buttonControl_->release()) {
+    bool success = false;
+    std::string error;
+    
+    if (useNetwork_) {
+        if (buttonNetwork_) {
+            success = buttonNetwork_->write(false);
+            error = buttonNetwork_->getLastError();
+        }
+    } else {
+        if (buttonControl_) {
+            success = buttonControl_->release();
+            error = buttonControl_->getLastError();
+        }
+    }
+    
+    if (success) {
         updateStatusBar("Button released");
         logMessage("Button released (GPIO 3 LOW)");
         emit buttonReleased();
     } else {
         QMessageBox::warning(this, "Button Control Failed",
                            QString("Failed to release button:\n%1")
-                           .arg(QString::fromStdString(buttonControl_->getLastError())));
+                           .arg(QString::fromStdString(error)));
     }
 }
 
@@ -703,7 +733,27 @@ void MainWindow::onButtonClick()
 {
     if (!isConnected_) return;
     
-    if (buttonControl_->click(100)) {
+    bool success = false;
+    std::string error;
+    
+    if (useNetwork_) {
+        if (buttonNetwork_) {
+            // Simulate click: press, wait, release
+            success = buttonNetwork_->write(true);
+            if (success) {
+                QThread::msleep(100);
+                success = buttonNetwork_->write(false);
+            }
+            error = buttonNetwork_->getLastError();
+        }
+    } else {
+        if (buttonControl_) {
+            success = buttonControl_->click(100);
+            error = buttonControl_->getLastError();
+        }
+    }
+    
+    if (success) {
         updateStatusBar("Button clicked");
         logMessage("Button clicked (100ms press)");
         emit buttonPressed();
@@ -711,7 +761,7 @@ void MainWindow::onButtonClick()
     } else {
         QMessageBox::warning(this, "Button Control Failed",
                            QString("Failed to click button:\n%1")
-                           .arg(QString::fromStdString(buttonControl_->getLastError())));
+                           .arg(QString::fromStdString(error)));
     }
 }
 
