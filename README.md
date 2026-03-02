@@ -15,11 +15,13 @@ The external Flash chip (~4 MB) contains encrypted audio stories and bookkeeping
 - **Virtual Patching**: Inject modified data at specific addresses to observe behavioral changes
 - **Button Control**: Programmatically control teddy bear playback via GPIO
 - **Efficient Buffering**: Hardware-assisted transaction buffering with ready signal
+- **Network Virtualization**: Run GUI/CLI on any machine while hardware stays on Raspberry Pi
 
 ### Components
 - **librebear**: Core C++ library for SPI/GPIO communication and data management
 - **rebear-cli**: Command-line utility for scripting and automation
 - **rebear-gui**: Qt5-based GUI application for interactive analysis
+- **rebear-server**: Network server daemon for remote hardware access
 
 ## Hardware Requirements
 

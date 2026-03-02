@@ -14,6 +14,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 # Build options
 option(BUILD_CLI "Build command-line utility" ON)
 option(BUILD_GUI "Build Qt GUI application" ON)
+option(BUILD_SERVER "Build network server daemon" ON)
 option(BUILD_TESTS "Build unit tests" OFF)
 
 # Find dependencies
@@ -39,6 +40,10 @@ if(BUILD_GUI AND Qt5_FOUND)
     add_subdirectory(gui)
 endif()
 
+if(BUILD_SERVER)
+    add_subdirectory(server)
+endif()
+
 # Installation
 install(DIRECTORY docs/ DESTINATION share/doc/rebear
     FILES_MATCHING PATTERN "*.md")
@@ -51,5 +56,6 @@ message(STATUS "  C++ Standard:      C++${CMAKE_CXX_STANDARD}")
 message(STATUS "  Build Type:        ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Build CLI:         ${BUILD_CLI}")
 message(STATUS "  Build GUI:         ${BUILD_GUI}")
+message(STATUS "  Build Server:      ${BUILD_SERVER}")
 message(STATUS "  Build Tests:       ${BUILD_TESTS}")
 message(STATUS "")

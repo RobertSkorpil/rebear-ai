@@ -8,6 +8,10 @@ set(REBEAR_SOURCES
     src/spi_protocol.cpp
     src/patch_manager.cpp
     src/gpio_control.cpp
+    src/protocol.cpp
+    src/network_client.cpp
+    src/spi_protocol_network.cpp
+    src/gpio_control_network.cpp
 )
 
 # Header files
@@ -18,6 +22,10 @@ set(REBEAR_HEADERS
     include/rebear/spi_protocol.h
     include/rebear/patch_manager.h
     include/rebear/gpio_control.h
+    include/rebear/protocol.h
+    include/rebear/network_client.h
+    include/rebear/spi_protocol_network.h
+    include/rebear/gpio_control_network.h
 )
 
 # Create shared library
