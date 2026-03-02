@@ -552,7 +552,7 @@ void MainWindow::onPollTransactions()
     bool ready = false;
     if (useNetwork_) {
         if (bufferMonitorNetwork_) {
-            ready = bufferMonitorNetwork_->read();
+            ready = bufferMonitorNetwork_->readInput();
         }
     } else {
         if (bufferMonitor_) {
