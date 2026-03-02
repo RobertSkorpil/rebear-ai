@@ -375,6 +375,120 @@ private:
 - Wait for buffer ready with timeout
 - Test interrupt-driven buffer ready callback
 
+### 1.8 Network Virtualization Layer
+
+**Priority**: HIGH - Enables remote GUI operation
+
+**See**: [`plans/PHASE_1.8_NETWORK_VIRTUALIZATION.md`](plans/PHASE_1.8_NETWORK_VIRTUALIZATION.md) for complete specification
+
+**Overview**:
+This phase adds network virtualization to enable running the GUI application on a different machine than the Raspberry Pi. The virtualization layer provides transparent access to SPI and GPIO operations over TCP/IP.
+
+**Components**:
+
+1. **Server Daemon** (`rebear-server`)
+   - Runs on Raspberry Pi
+   - Listens on TCP port 9876
+   - Routes network commands to local hardware
+   - Manages multiple client connections
+
+2. **Client Library** (integrated into `librebear`)
+   - Network-based SPI and GPIO implementations
+   - Same API as local hardware access
+   - Automatic reconnection on failures
+
+3. **Abstraction Layer**
+   - Factory pattern for creating local/network objects
+   - Runtime mode selection
+   - Configuration file support
+
+**Files**:
+
+Server:
+- [`server/main.cpp`](server/main.cpp)
+- [`server/network_server.h`](server/network_server.h)
+- [`server/network_server.cpp`](server/network_server.cpp)
+- [`server/command_handler.h`](server/command_handler.h)
+- [`server/command_handler.cpp`](server/command_handler.cpp)
+- [`server/client_session.h`](server/client_session.h)
+- [`server/client_session.cpp`](server/client_session.cpp)
+
+Client Library:
+- [`lib/include/rebear/network_client.h`](lib/include/rebear/network_client.h)
+- [`lib/src/network_client.cpp`](lib/src/network_client.cpp)
+- [`lib/include/rebear/spi_protocol_network.h`](lib/include/rebear/spi_protocol_network.h)
+- [`lib/src/spi_protocol_network.cpp`](lib/src/spi_protocol_network.cpp)
+- [`lib/include/rebear/gpio_control_network.h`](lib/include/rebear/gpio_control_network.h)
+- [`lib/src/gpio_control_network.cpp`](lib/src/gpio_control_network.cpp)
+- [`lib/include/rebear/factory.h`](lib/include/rebear/factory.h)
+- [`lib/src/factory.cpp`](lib/src/factory.cpp)
+
+Shared Protocol:
+- [`lib/include/rebear/protocol.h`](lib/include/rebear/protocol.h)
+
+**Network Protocol**:
+- Transport: TCP (reliable, ordered delivery)
+- Port: 9876 (default, configurable)
+- Message format: Binary with length prefix
+- Magic bytes: `0x52 0x42` ("RB")
+- No SSL (local network only)
+
+**Factory Pattern Usage**:
+```cpp
+// Local mode (direct hardware)
+auto spi = SPIProtocolFactory::create(
+    SPIProtocolFactory::Mode::Local
+);
+
+// Network mode (remote hardware)
+auto spi = SPIProtocolFactory::create(
+    SPIProtocolFactory::Mode::Network,
+    "tcp://raspberrypi.local:9876"
+);
+
+// Both have identical API
+spi->open("/dev/spidev0.0", 100000);
+auto trans = spi->readTransaction();
+```
+
+**Implementation Phases**:
+1. Phase 1.8.1: Protocol Design
+2. Phase 1.8.2: Network Client Library
+3. Phase 1.8.3: Server Daemon
+4. Phase 1.8.4: SPI/GPIO Network Wrappers
+5. Phase 1.8.5: Integration and Testing
+6. Phase 1.8.6: CLI/GUI Updates
+7. Phase 1.8.7: Documentation
+
+**Server Installation**:
+```bash
+# Build and install
+cd build
+cmake -DBUILD_SERVER=ON ..
+make rebear-server
+sudo make install
+
+# Enable systemd service
+sudo systemctl enable rebear-server
+sudo systemctl start rebear-server
+```
+
+**Client Configuration**:
+```bash
+# CLI with network mode
+rebear-cli --remote tcp://raspberrypi.local:9876 monitor
+
+# GUI connection dialog
+# Select "Network" mode and enter hostname
+```
+
+**Benefits**:
+- Run GUI on comfortable desktop/laptop
+- Pi remains connected to hardware
+- Multiple clients can connect simultaneously
+- Same API for local and network modes
+- Transparent operation
+
 ## Phase 2: Command-Line Utility
 
 **IMPORTANT NOTE**: The CLI implementation uses `std::atomic<bool>` for signal handling. While `volatile sig_atomic_t` is the traditional C approach, C++ provides better alternatives. Use `std::atomic` with appropriate memory ordering for signal handlers and any shared state between threads or signal handlers.
@@ -576,7 +690,98 @@ private:
 };
 ```
 
-### 3.2 TransactionViewer Widget
+### 3.2 Flash Memory Integration & Hex Editor
+
+**Priority**: CRITICAL - Enables visual patch creation from flash.bin
+
+**Purpose**: Load and actively use the [`data/flash.bin`](../data/flash.bin) file so users can:
+- View memory contents at any address
+- Create patches by editing specific bytes (not retyping unchanged bytes)
+- Navigate between transactions and Flash addresses
+- Visualize memory access patterns overlaid on actual Flash content
+
+**Files to Create**:
+- [`gui/flash_memory_model.h`](gui/flash_memory_model.h) - Loads and manages flash.bin
+- [`gui/flash_memory_model.cpp`](gui/flash_memory_model.cpp)
+- [`gui/widgets/hex_editor_widget.h`](gui/widgets/hex_editor_widget.h) - Hex editor for viewing/editing
+- [`gui/widgets/hex_editor_widget.cpp`](gui/widgets/hex_editor_widget.cpp)
+
+**FlashMemoryModel Class**:
+```cpp
+class FlashMemoryModel : public QObject {
+    Q_OBJECT
+    
+public:
+    // Load Flash dump from file
+    bool loadFromFile(const QString& filename);
+    
+    // Get data at address
+    QByteArray readBytes(uint32_t address, size_t length) const;
+    
+    // Mark address as accessed (for heat map)
+    void markAccessed(uint32_t address, uint32_t count);
+    
+    // Get access count (for visualization)
+    uint32_t getAccessCount(uint32_t address) const;
+    
+signals:
+    void flashLoaded(const QString& filename, size_t size);
+    void accessStatsChanged();
+    
+private:
+    QByteArray flashData_;  // Entire ~4MB Flash contents
+    QMap<uint32_t, uint32_t> accessCounts_;  // For heat map
+};
+```
+
+**HexEditorWidget Class**:
+```cpp
+class HexEditorWidget : public QWidget {
+    Q_OBJECT
+    
+public:
+    // Set Flash memory model
+    void setFlashModel(FlashMemoryModel* model);
+    
+    // Navigate to address
+    void gotoAddress(uint32_t address);
+    
+    // Set selection (for highlighting patch regions)
+    void setSelection(uint32_t address, size_t length);
+    
+    // Get selected bytes
+    QByteArray selectedBytes() const;
+    
+signals:
+    void addressChanged(uint32_t address);
+    void selectionChanged(uint32_t address, size_t length);
+    void createPatchRequested(uint32_t address, const QByteArray& data);
+    
+private:
+    FlashMemoryModel* flashModel_;
+    QTableView* hexView_;
+    QLineEdit* addressInput_;
+    
+    static constexpr int BYTES_PER_ROW = 16;  // Standard hex editor layout
+};
+```
+
+**Key Workflow**:
+1. User loads flash.bin file
+2. User clicks on transaction → Hex editor jumps to that address
+3. User sees current bytes at address (e.g., `4D 5A 90 00 03 00 00 00`)
+4. User selects 8 bytes and modifies specific bytes (e.g., change first byte to FF)
+5. User clicks "Create Patch from Selection"
+6. Patch dialog opens with data: `FF 5A 90 00 03 00 00 00` (only first byte changed!)
+7. User applies patch to FPGA
+
+**MainWindow Integration**:
+- Add "Load Flash Dump" to File menu
+- Add "Goto Address" to Tools menu
+- Connect transaction clicks to hex editor navigation
+- Update PatchEditor to show current Flash bytes at patch address
+
+### 3.3 TransactionViewer Widget
 
 **Priority**: HIGH - Core monitoring feature
 
@@ -592,6 +797,7 @@ private:
 - Auto-scroll option
 - Search/filter
 - Export selection
+- **Click on transaction → Jump to address in hex editor**
 
 **Model**:
 ```cpp

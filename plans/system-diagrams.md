@@ -2,7 +2,7 @@
 
 ## Hardware Architecture
 
-### Physical Setup
+### Physical Setup (Local Mode)
 
 ```mermaid
 graph TB
@@ -35,6 +35,53 @@ graph TB
     BUFFER -->|Transaction Data| SPI_MASTER
     SPI_MASTER -->|Patch Config| MISO_MOD
     APP -->|Control| SPI_MASTER
+```
+
+### Physical Setup (Network Mode)
+
+```mermaid
+graph TB
+    subgraph Teddy Bear
+        MCU[MCU Microcontroller]
+        FLASH[Flash Memory<br/>Encrypted Data]
+    end
+    
+    subgraph FPGA Board - SPI Pass-Through with Monitoring
+        FPGA[FPGA<br/>Altera/Avalon SPI Core]
+        MOSI_PT[MOSI Pass-Through]
+        MISO_MOD[MISO Modifier<br/>Patch Injection]
+        BUFFER[Transaction Buffer]
+    end
+    
+    subgraph Raspberry Pi 3 - Server
+        SPI_MASTER[SPI Master Interface]
+        GPIO_HW[GPIO Hardware]
+        SERVER[rebear-server<br/>TCP Server<br/>Port 9876]
+    end
+    
+    subgraph Remote Machine - Client
+        APP[rebear-gui/cli]
+        CLIENT[Network Client<br/>librebear]
+    end
+    
+    MCU -->|MOSI| MOSI_PT
+    MOSI_PT -->|Pass-Through| FLASH
+    FLASH -->|MISO Original| MISO_MOD
+    MISO_MOD -->|MISO Patched/Original| MCU
+    
+    MOSI_PT -->|Record Transactions| BUFFER
+    MISO_MOD -->|Apply Patches| MISO_MOD
+    
+    SPI_MASTER <-->|SPI Commands| FPGA
+    GPIO_HW <-->|GPIO Control| FPGA
+    BUFFER -->|Transaction Data| SPI_MASTER
+    SPI_MASTER -->|Patch Config| MISO_MOD
+    
+    SERVER -->|Control| SPI_MASTER
+    SERVER -->|Control| GPIO_HW
+    
+    CLIENT <-->|TCP/IP| SERVER
+    APP -->|API Calls| CLIENT
 ```
 
 ### SPI Bus Topology - Pass-Through Architecture
@@ -79,7 +126,7 @@ Pi CS   ◄──────────► FPGA SPI Slave
 
 ## Software Architecture
 
-### Component Hierarchy
+### Component Hierarchy (Local Mode)
 
 ```mermaid
 graph TB
@@ -95,6 +142,7 @@ graph TB
     
     subgraph Core Library Layer
         SPI[SPIProtocol]
+        GPIO[GPIOControl]
         TRANS[Transaction]
         PATCH[Patch]
         ESC[EscapeCodec]
@@ -102,6 +150,7 @@ graph TB
     
     subgraph Hardware Layer
         SPIDEV[Linux spidev Driver]
+        GPIODEV[Linux GPIO Driver]
         HW[FPGA Hardware]
     end
     
@@ -120,7 +169,80 @@ graph TB
     SPI --> PATCH
     
     SPI --> SPIDEV
+    GPIO --> GPIODEV
     SPIDEV --> HW
+    GPIODEV --> HW
+```
+
+### Component Hierarchy (Network Mode)
+
+```mermaid
+graph TB
+    subgraph Remote Machine
+        subgraph User Interface Layer
+            GUI[Qt GUI Application<br/>rebear-gui]
+            CLI[Command Line Utility<br/>rebear-cli]
+        end
+        
+        subgraph Application Layer
+            PM[PatchManager]
+            TM[TransactionManager]
+        end
+        
+        subgraph Core Library Layer - Client
+            SPIN[SPIProtocolNetwork]
+            GPION[GPIOControlNetwork]
+            NC[NetworkClient]
+            TRANS[Transaction]
+            PATCH[Patch]
+        end
+    end
+    
+    subgraph Raspberry Pi Server
+        subgraph Server Layer
+            NS[NetworkServer]
+            CH[CommandHandler]
+            CS[ClientSession]
+        end
+        
+        subgraph Core Library Layer - Server
+            SPI[SPIProtocol]
+            GPIO[GPIOControl]
+            ESC[EscapeCodec]
+        end
+        
+        subgraph Hardware Layer
+            SPIDEV[Linux spidev Driver]
+            GPIODEV[Linux GPIO Driver]
+            HW[FPGA Hardware]
+        end
+    end
+    
+    GUI --> PM
+    GUI --> TM
+    CLI --> PM
+    CLI --> TM
+    
+    PM --> PATCH
+    PM --> SPIN
+    TM --> TRANS
+    TM --> SPIN
+    
+    SPIN --> NC
+    GPION --> NC
+    
+    NC <-->|TCP/IP<br/>Port 9876| NS
+    
+    NS --> CS
+    CS --> CH
+    CH --> SPI
+    CH --> GPIO
+    
+    SPI --> ESC
+    SPI --> SPIDEV
+    GPIO --> GPIODEV
+    SPIDEV --> HW
+    GPIODEV --> HW
 ```
 
 ### Class Relationships

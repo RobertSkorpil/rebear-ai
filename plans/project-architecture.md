@@ -19,8 +19,19 @@ This project aims to reverse-engineer a storytelling teddy bear by intercepting 
                       ┌─────────────┐
                       │ Raspberry   │
                       │   Pi 3      │
+                      │ (Server)    │
+                      └──────┬──────┘
+                             │ TCP/IP
+                             │ (Port 9876)
+                             ↓
+                      ┌─────────────┐
+                      │ Remote      │
+                      │ Machine     │
+                      │ (GUI/CLI)   │
                       └─────────────┘
 ```
+
+**Network Virtualization**: The system supports running the GUI application on a remote machine. The Raspberry Pi runs a server daemon ([`rebear-server`](server/main.cpp)) that provides network access to SPI and GPIO operations over TCP/IP.
 
 **Important**: The Flash chip has been physically unsoldered from the teddy bear PCB and rewired through a breakout board. The original MCU→Flash connection is SEVERED.
 
@@ -86,23 +97,48 @@ rebear/
 ├── CMakeLists.txt                 # Root CMake configuration
 ├── README.md                      # Project documentation
 ├── plans/
-│   └── project-architecture.md    # This file
+│   ├── project-architecture.md    # This file
+│   └── PHASE_1.8_NETWORK_VIRTUALIZATION.md  # Network virtualization spec
 ├── docs/
 │   ├── protocol.md               # Detailed SPI protocol documentation
-│   └── usage.md                  # User guide
+│   ├── usage.md                  # User guide
+│   ├── NETWORK_SETUP.md          # Network setup guide
+│   └── NETWORK_PROTOCOL.md       # Network protocol specification
 ├── lib/
 │   ├── CMakeLists.txt
 │   ├── include/
 │   │   └── rebear/
-│   │       ├── spi_protocol.h    # Core protocol handling
+│   │       ├── spi_protocol.h    # Core protocol handling (local)
+│   │       ├── spi_protocol_network.h  # Network-based SPI
+│   │       ├── gpio_control.h    # GPIO control (local)
+│   │       ├── gpio_control_network.h  # Network-based GPIO
 │   │       ├── transaction.h     # Transaction data structures
 │   │       ├── patch.h           # Patch management
-│   │       └── escape_codec.h    # Avalon escape sequence codec
+│   │       ├── escape_codec.h    # Avalon escape sequence codec
+│   │       ├── network_client.h  # TCP client for network mode
+│   │       ├── factory.h         # Factory for local/network objects
+│   │       └── protocol.h        # Network protocol definitions
 │   └── src/
 │       ├── spi_protocol.cpp
+│       ├── spi_protocol_network.cpp
+│       ├── gpio_control.cpp
+│       ├── gpio_control_network.cpp
 │       ├── transaction.cpp
 │       ├── patch.cpp
-│       └── escape_codec.cpp
+│       ├── escape_codec.cpp
+│       ├── network_client.cpp
+│       └── factory.cpp
+├── server/
+│   ├── CMakeLists.txt
+│   ├── main.cpp                  # Server daemon entry point
+│   ├── network_server.h          # TCP server implementation
+│   ├── network_server.cpp
+│   ├── command_handler.h         # Command routing
+│   ├── command_handler.cpp
+│   ├── client_session.h          # Per-client connection
+│   ├── client_session.cpp
+│   ├── rebear-server.service     # Systemd service file
+│   └── rebear-server.conf.example  # Configuration example
 ├── cli/
 │   ├── CMakeLists.txt
 │   ├── main.cpp                  # Command-line interface
