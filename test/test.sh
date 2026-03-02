@@ -1,21 +1,44 @@
 #!/bin/bash
 
-# Base pattern: 2d 00 2d 00 4D 24 59 00
-# This script cycles through flipping each bit (0-63) one at a time
+# Base patterns to test
+# This script cycles through flipping each bit (0-63) one at a time for each base pattern
+# Also runs a no-flip test for each base pattern
 
 # Patch locations
 LOCATIONS=(0x200 0x208 0x210 0x218)
 
-# Base pattern as hex bytes
-BASE_PATTERN=(0x2d 0x00 0x2d 0x00 0x4D 0x24 0x59 0x00)
+# Base patterns as arrays of hex bytes
+declare -A BASE_PATTERNS
+BASE_PATTERNS[pattern0]="0x2d 0x00 0x2d 0x00 0x4D 0x24 0x59 0x00"
+BASE_PATTERNS[pattern1]="0x7f 0xa5 0x6d 0xa5 0x8d 0xc9 0x99 0xa5"
+BASE_PATTERNS[pattern2]="0x59 0xb3 0x7f 0xb3 0x7f 0xd3 0x6b 0xb3"
+BASE_PATTERNS[pattern3]="0x61 0x7c 0xb5 0x7c 0xc5 0xa0 0xa1 0x7c"
 
 # Path to rebear-cli executable
 REBEAR_CLI="build/cli/rebear-cli"
 
+# Function to convert pattern string to array
+pattern_to_array() {
+    local pattern_str=$1
+    local -a result
+    read -ra result <<< "$pattern_str"
+    echo "${result[@]}"
+}
+
+# Function to get pattern as hex string
+get_pattern_hex() {
+    local -a pattern=($1)
+    printf "%02x%02x%02x%02x%02x%02x%02x%02x" \
+        ${pattern[0]} ${pattern[1]} ${pattern[2]} ${pattern[3]} \
+        ${pattern[4]} ${pattern[5]} ${pattern[6]} ${pattern[7]}
+}
+
 # Function to flip a bit in the pattern
 flip_bit() {
     local bit_index=$1
-    local pattern=("${BASE_PATTERN[@]}")
+    local pattern_str=$2
+    local -a pattern
+    read -ra pattern <<< "$pattern_str"
     
     # Determine which byte and which bit within that byte
     local byte_index=$((bit_index / 8))
@@ -32,14 +55,13 @@ flip_bit() {
         ${pattern[4]} ${pattern[5]} ${pattern[6]} ${pattern[7]}
 }
 
-# Main loop: cycle through all 64 bits
-for bit in {0..63}; do
-    echo "=== Cycle $bit: Flipping bit $bit ==="
+# Function to run a test cycle
+run_test_cycle() {
+    local cycle_name=$1
+    local pattern=$2
     
-    # Get the pattern with the current bit flipped (no spaces)
-    PATTERN=$(flip_bit $bit)
-    
-    echo "Pattern: $PATTERN"
+    echo "=== $cycle_name ==="
+    echo "Pattern: $pattern"
     
     # Clear all patches first
     $REBEAR_CLI patch clear --all
@@ -48,13 +70,17 @@ for bit in {0..63}; do
     # Use patch IDs 0-3 for the four locations
     patch_id=0
     for loc in "${LOCATIONS[@]}"; do
-        echo "Patching location $loc (ID $patch_id) with: $PATTERN"
-        $REBEAR_CLI patch set --id $patch_id --address $loc --data $PATTERN
+        echo "Patching location $loc (ID $patch_id) with: $pattern"
+        $REBEAR_CLI patch set --id $patch_id --address $loc --data $pattern
         patch_id=$((patch_id + 1))
     done
     
-    # Start monitoring in background, output to file named by bit pattern
-    OUTPUT_FILE="bit_${bit}_${PATTERN}.log"
+    # Clear transaction buffer to remove leftover data
+    echo "Clearing transaction buffer"
+    $REBEAR_CLI clear
+    
+    # Start monitoring in background, output to file named by cycle
+    OUTPUT_FILE="${cycle_name}_${pattern}.log"
     echo "Starting monitor, output to: $OUTPUT_FILE"
     $REBEAR_CLI monitor --duration 1 > "$OUTPUT_FILE" 2>&1 &
     MONITOR_PID=$!
@@ -73,10 +99,57 @@ for bit in {0..63}; do
     # Wait for monitor to complete
     wait $MONITOR_PID
     
-    echo "Cycle $bit complete"
+    echo "Cycle complete"
+    echo ""
+}
+
+# Main execution
+echo "Starting test suite with 4 base patterns"
+echo "Each pattern will be tested with:"
+echo "  - 1 no-flip cycle (base pattern)"
+echo "  - 64 bit-flip cycles (one bit flipped at a time)"
+echo "Total: 4 x 65 = 260 cycles"
+echo ""
+
+# Counter for progress
+total_cycles=0
+
+# Loop through each base pattern
+for pattern_name in pattern0 pattern1 pattern2 pattern3; do
+    pattern_str="${BASE_PATTERNS[$pattern_name]}"
+    echo "========================================"
+    echo "Testing $pattern_name: $pattern_str"
+    echo "========================================"
+    echo ""
+    
+    # Run no-flip test first
+    echo "--- No-flip test for $pattern_name ---"
+    PATTERN=$(get_pattern_hex "$pattern_str")
+    run_test_cycle "${pattern_name}_noflip" "$PATTERN"
+    total_cycles=$((total_cycles + 1))
+    echo "Progress: $total_cycles/260 cycles completed"
+    echo ""
+    
+    # Run bit-flip tests
+    for bit in {0..63}; do
+        PATTERN=$(flip_bit $bit "$pattern_str")
+        run_test_cycle "${pattern_name}_bit${bit}" "$PATTERN"
+        total_cycles=$((total_cycles + 1))
+        
+        # Show progress every 10 cycles
+        if [ $((bit % 10)) -eq 9 ]; then
+            echo "Progress: $total_cycles/260 cycles completed"
+            echo ""
+        fi
+    done
+    
+    echo "$pattern_name complete (65 cycles)"
     echo ""
 done
 
-echo "All 64 bit-flip cycles completed."
+echo "========================================"
+echo "All tests completed!"
+echo "Total cycles: $total_cycles"
+echo "========================================"
 echo "Clearing all patches..."
 $REBEAR_CLI patch clear --all

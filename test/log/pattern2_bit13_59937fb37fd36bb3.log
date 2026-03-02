@@ -1,0 +1,60 @@
+Connected to FPGA on /dev/spidev0.0
+
+Monitoring transactions (Press CTRL+C to stop)...
+
+Time(ms)    Address     Count     
+----------------------------------
+36          0x1ed5a8    48        
+49          0x218       PATCHING  
+60          0x1e9144    32        
+72          0x1e9164    172       
+84          0x1e9210    576       
+96          0x1e9450    108       
+108         0x1e94bc    576       
+120         0x1e96fc    166       
+132         0x1e97a2    576       
+144         0x1e99e2    168       
+156         0x1e9a8a    576       
+168         0x1e9cca    132       
+180         0x1e9d4e    576       
+192         0x1e9f8e    102       
+204         0x1e9ff4    576       
+216         0x1ea234    50        
+228         0x1ea266    576       
+240         0x1ea4a6    86        
+251         0x1ea4fc    576       
+263         0x1ea73c    36        
+275         0x1ea760    576       
+287         0x1ea9a0    70        
+299         0x1ea9e6    576       
+311         0x1eac26    86        
+322         0x1eac7c    576       
+334         0x1eaebc    576       
+346         0x1eb0fc    158       
+358         0x1eb19a    576       
+370         0x1eb3da    86        
+382         0x1eb430    576       
+394         0x1eb670    94        
+406         0x1eb6ce    576       
+418         0x1eb90e    2         
+430         0x1eb910    576       
+442         0x1ebb50    2         
+453         0x1ebb52    576       
+465         0x1ebd92    54        
+477         0x1ebdc8    576       
+489         0x1ec008    84        
+501         0x1ec05c    576       
+513         0x1ec29c    74        
+525         0x1ec2e6    576       
+537         0x1ec526    48        
+549         0x1ec556    576       
+561         0x1ec796    228       
+572         0x1ec87a    576       
+584         0x1ecaba    86        
+596         0x1ecb10    576       
+608         0x1ecd50    180       
+620         0x1ece04    576       
+632         0x1ed044    30        
+
+----------------------------------
+Total transactions: 51

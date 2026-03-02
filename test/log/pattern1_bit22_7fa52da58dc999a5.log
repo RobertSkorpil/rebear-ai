@@ -1,0 +1,63 @@
+Connected to FPGA on /dev/spidev0.0
+
+Monitoring transactions (Press CTRL+C to stop)...
+
+Time(ms)    Address     Count     
+----------------------------------
+36          0xeebd20    190       
+52          0x208       PATCHING  
+63          0xcea762    16        
+75          0xcea772    72        
+87          0xcea7ba    576       
+99          0xcea9fa    118       
+111         0xceaa70    576       
+123         0xceacb0    58        
+135         0xceacea    576       
+146         0xceaf2a    88        
+158         0xceaf82    576       
+170         0xceb1c2    98        
+182         0xceb224    576       
+194         0xceb464    54        
+206         0xceb49a    576       
+217         0xceb6da    192       
+229         0xceb79a    576       
+241         0xceb9da    178       
+256         0xceba8c    576       
+267         0xcebccc    30        
+279         0xcebcea    576       
+291         0xcebf2a    126       
+303         0xcebfa8    576       
+315         0xcec1e8    110       
+327         0xcec256    576       
+338         0xcec496    182       
+350         0xcec54c    576       
+362         0xcec78c    576       
+374         0xcec9cc    150       
+386         0xceca62    576       
+398         0xcecca2    152       
+409         0xcecd3a    576       
+421         0xcecf7a    96        
+433         0xcecfda    576       
+445         0xced21a    84        
+457         0xced26e    576       
+469         0xced4ae    202       
+480         0xced578    576       
+492         0xced7b8    28        
+504         0xced7d4    92        
+516         0xced830    38        
+528         0xced856    42        
+540         0xced880    122       
+552         0xced8fa    14        
+564         0xced908    38        
+575         0xced92e    212       
+587         0xceda02    64        
+599         0xceda42    66        
+611         0xceda84    118       
+623         0xcedafa    74        
+636         0xcedb44    74        
+647         0xcedb8e    66        
+659         0xcedbd0    100       
+671         0xcedc34    54        
+
+----------------------------------
+Total transactions: 54

@@ -1,0 +1,80 @@
+Connected to FPGA on /dev/spidev0.0
+
+Monitoring transactions (Press CTRL+C to stop)...
+
+Time(ms)    Address     Count     
+----------------------------------
+36          0x1ebc2a    354       
+48          0x200       PATCHING  
+60          0x1ea144    46        
+72          0x1ea172    34        
+84          0x1ea194    288       
+96          0x1ea2b4    54        
+109         0x1ea2ea    288       
+121         0x1ea40a    106       
+133         0x1ea474    288       
+145         0x1ea594    26        
+157         0x1ea5ae    288       
+169         0x1ea6ce    68        
+181         0x1ea712    288       
+193         0x1ea832    78        
+205         0x1ea880    288       
+217         0x1ea9a0    170       
+229         0x1eaa4a    288       
+241         0x1eab6a    288       
+253         0x1eac8a    176       
+265         0x1ead3a    288       
+277         0x1eae5a    56        
+289         0x1eae92    288       
+301         0x1eafb2    178       
+313         0x1eb064    288       
+325         0x1eb184    106       
+337         0x1eb1ee    288       
+348         0x1eb30e    196       
+361         0x1eb3d2    288       
+373         0x1eb4f2    102       
+385         0x1eb558    288       
+397         0x1eb678    120       
+409         0x1eb6f0    288       
+421         0x1eb810    184       
+433         0x1eb8c8    288       
+445         0x1eb9e8    94        
+457         0x1eba46    288       
+469         0x1ebb66    114       
+481         0x1ebbd8    288       
+493         0x1ebcf8    50        
+505         0x1ebd2a    288       
+517         0x1ebe4a    34        
+529         0x1ebe6c    288       
+541         0x1ebf8c    22        
+553         0x1ebfa2    288       
+565         0x1ec0c2    102       
+577         0x1ec128    288       
+589         0x1ec248    118       
+601         0x1ec2be    288       
+613         0x1ec3de    206       
+625         0x1ec4ac    288       
+637         0x1ec5cc    66        
+649         0x1ec60e    288       
+661         0x1ec72e    56        
+673         0x1ec766    288       
+685         0x1ec886    76        
+696         0x1ec8d2    288       
+708         0x1ec9f2    20        
+721         0x1eca06    288       
+733         0x1ecb26    140       
+744         0x1ecbb2    288       
+757         0x1eccd2    70        
+769         0x1ecd18    288       
+781         0x1ece38    202       
+793         0x1ecf02    288       
+805         0x1ed022    148       
+817         0x1ed0b6    288       
+829         0x1ed1d6    80        
+841         0x1ed226    288       
+853         0x1ed346    288       
+865         0x1ed466    34        
+877         0x1ed488    288       
+
+----------------------------------
+Total transactions: 71

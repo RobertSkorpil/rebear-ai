@@ -1,0 +1,24 @@
+Connected to FPGA on /dev/spidev0.0
+
+Monitoring transactions (Press CTRL+C to stop)...
+
+Time(ms)    Address     Count     
+----------------------------------
+37          0x218       PATCHING  
+49          0x2cfe7c    34        
+61          0x2cfe9e    66        
+73          0x2cfee0    54        
+180         0x2cff16    114       
+192         0x2cff88    166       
+299         0x2d002e    146       
+310         0x2d00c0    158       
+416         0x2d015e    10        
+428         0x2d0168    90        
+604         0x2d01c2    2         
+615         0x210       PATCHING  
+627         0x2cfe7c    34        
+639         0x2cfe9e    66        
+651         0x2cfee0    54        
+
+----------------------------------
+Total transactions: 15

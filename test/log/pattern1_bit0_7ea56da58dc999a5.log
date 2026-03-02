@@ -1,0 +1,82 @@
+Connected to FPGA on /dev/spidev0.0
+
+Monitoring transactions (Press CTRL+C to stop)...
+
+Time(ms)    Address     Count     
+----------------------------------
+36          0x200       PATCHING  
+48          0xda763     18        
+60          0xda775     278       
+72          0xda88b     576       
+84          0xdaacb     40        
+96          0xdaaf3     576       
+108         0xdad33     152       
+120         0xdadcb     576       
+132         0xdb00b     120       
+144         0xdb083     576       
+156         0xdb2c3     152       
+168         0xdb35b     576       
+180         0xdb59b     176       
+191         0xdb64b     576       
+203         0xdb88b     176       
+215         0xdb93b     576       
+227         0xdbb7b     94        
+239         0xdbbd9     576       
+251         0xdbe19     114       
+263         0xdbe8b     576       
+275         0xdc0cb     74        
+287         0xdc115     576       
+298         0xdc355     296       
+310         0xdc47d     576       
+322         0xdc6bd     112       
+334         0xdc72d     576       
+346         0xdc96d     54        
+358         0xdc9a3     576       
+370         0xdcbe3     142       
+382         0xdcc71     576       
+394         0xdceb1     86        
+406         0xdcf07     576       
+418         0xdd147     146       
+430         0xdd1d9     576       
+441         0xdd419     92        
+453         0xdd475     576       
+465         0xdd6b5     180       
+477         0xdd769     576       
+489         0xdd9a9     40        
+501         0xdd9d1     576       
+513         0xddc11     108       
+525         0xddc7d     576       
+537         0xddebd     150       
+549         0xddf53     576       
+561         0xde193     126       
+573         0xde211     576       
+584         0xde451     158       
+596         0xde4ef     576       
+608         0xde72f     32        
+620         0xde74f     576       
+632         0xde98f     142       
+644         0xdea1d     576       
+656         0xdec5d     54        
+668         0xdec93     576       
+679         0xdeed3     310       
+691         0xdf009     576       
+703         0xdf249     116       
+715         0xdf2bd     576       
+727         0xdf4fd     116       
+739         0xdf571     576       
+751         0xdf7b1     20        
+763         0xdf7c5     576       
+775         0xdfa05     24        
+786         0xdfa1d     576       
+798         0xdfc5d     34        
+813         0xdfc7f     576       
+825         0xdfebf     142       
+837         0xdff4d     576       
+848         0xe018d     132       
+860         0xe0211     576       
+872         0xe0451     286       
+884         0xe056f     132       
+896         0xe05f3     186       
+
+----------------------------------
+Total transactions: 73
