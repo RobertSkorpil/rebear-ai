@@ -4,12 +4,13 @@ Monitoring transactions (Press CTRL+C to stop)...
 
 Time(ms)    Address     Count     
 ----------------------------------
-36          0x1ed062    576       
-48          0x210       PATCHING  
-60          0x1ef144    12        
-72          0x1ef150    156       
-305         0x1ef1ec    10        
-561         0x1ef1f6    128       
+13          0x1ebb52    576       
+25          0x1ebd92    54        
+645         0x1ebdc8    576       
+657         0x200       PATCHING  
+669         0x1ef144    12        
+680         0x1ef150    156       
+914         0x1ef1ec    10        
 
 ----------------------------------
-Total transactions: 6
+Total transactions: 7

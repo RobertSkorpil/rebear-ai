@@ -7,22 +7,22 @@ Time(ms)    Address     Count
 37          0x210       PATCHING  
 49          0xea762     4         
 61          0xea766     66        
-84          0xea7a8     80        
+85          0xea7a8     80        
 120         0xea7f8     74        
-155         0xea842     74        
-190         0xea88c     66        
-226         0xea8ce     88        
-261         0xea926     80        
-308         0xea976     76        
-343         0xea9c2     70        
-378         0xeaa08     88        
-414         0xeaa60     74        
-450         0xeaaaa     72        
-485         0xeaaf2     84        
-523         0xeab46     78        
-558         0xeab94     80        
-593         0xeabe4     78        
-629         0xeac32     70        
+157         0xea842     74        
+193         0xea88c     66        
+228         0xea8ce     88        
+264         0xea926     80        
+299         0xea976     76        
+334         0xea9c2     70        
+381         0xeaa08     88        
+416         0xeaa60     74        
+451         0xeaaaa     72        
+487         0xeaaf2     84        
+522         0xeab46     78        
+557         0xeab94     80        
+592         0xeabe4     78        
+628         0xeac32     70        
 
 ----------------------------------
 Total transactions: 19

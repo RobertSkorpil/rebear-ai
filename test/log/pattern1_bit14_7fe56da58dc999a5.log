@@ -5,20 +5,20 @@ Monitoring transactions (Press CTRL+C to stop)...
 Time(ms)    Address     Count     
 ----------------------------------
 25          0xe884c     158       
-645         0x208       PATCHING  
-657         0xee762     4         
-669         0xee766     72        
-681         0xee7ae     80        
-705         0xee7fe     60        
-730         0xee83a     150       
-754         0xee8d0     222       
-778         0xee9ae     120       
-801         0xeea26     112       
-848         0xeea96     132       
-862         0xeeb1a     88        
-886         0xeeb72     26        
-909         0xeeb8c     58        
-934         0xeebc6     42        
+641         0x208       PATCHING  
+653         0xee762     4         
+665         0xee766     72        
+677         0xee7ae     80        
+701         0xee7fe     60        
+725         0xee83a     150       
+760         0xee8d0     222       
+784         0xee9ae     120       
+807         0xeea26     112       
+831         0xeea96     132       
+866         0xeeb1a     88        
+890         0xeeb72     26        
+914         0xeeb8c     58        
+938         0xeebc6     42        
 
 ----------------------------------
 Total transactions: 15

@@ -6,23 +6,23 @@ Time(ms)    Address     Count
 ----------------------------------
 37          0x218       PATCHING  
 49          0xea762     4         
-60          0xea766     66        
-84          0xea7a8     80        
-119         0xea7f8     74        
+61          0xea766     66        
+85          0xea7a8     80        
+120         0xea7f8     74        
 155         0xea842     74        
-190         0xea88c     66        
-229         0xea8ce     88        
-264         0xea926     80        
-299         0xea976     76        
-334         0xea9c2     70        
-370         0xeaa08     88        
-405         0xeaa60     74        
-452         0xeaaaa     72        
-487         0xeaaf2     84        
-522         0xeab46     78        
-558         0xeab94     80        
-593         0xeabe4     78        
-628         0xeac32     70        
+191         0xea88c     66        
+226         0xea8ce     88        
+261         0xea926     80        
+308         0xea976     76        
+343         0xea9c2     70        
+379         0xeaa08     88        
+414         0xeaa60     74        
+449         0xeaaaa     72        
+484         0xeaaf2     84        
+520         0xeab46     78        
+555         0xeab94     80        
+591         0xeabe4     78        
+626         0xeac32     70        
 
 ----------------------------------
 Total transactions: 19

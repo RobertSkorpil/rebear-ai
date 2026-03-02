@@ -13,6 +13,7 @@ BASE_PATTERNS[pattern0]="0x2d 0x00 0x2d 0x00 0x4D 0x24 0x59 0x00"
 BASE_PATTERNS[pattern1]="0x7f 0xa5 0x6d 0xa5 0x8d 0xc9 0x99 0xa5"
 BASE_PATTERNS[pattern2]="0x59 0xb3 0x7f 0xb3 0x7f 0xd3 0x6b 0xb3"
 BASE_PATTERNS[pattern3]="0x61 0x7c 0xb5 0x7c 0xc5 0xa0 0xa1 0x7c"
+BASE_PATTERNS[pattern4]="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00"
 
 # Path to rebear-cli executable
 REBEAR_CLI="build/cli/rebear-cli"
@@ -104,18 +105,18 @@ run_test_cycle() {
 }
 
 # Main execution
-echo "Starting test suite with 4 base patterns"
+echo "Starting test suite with 5 base patterns"
 echo "Each pattern will be tested with:"
 echo "  - 1 no-flip cycle (base pattern)"
 echo "  - 64 bit-flip cycles (one bit flipped at a time)"
-echo "Total: 4 x 65 = 260 cycles"
+echo "Total: 5 x 65 = 325 cycles"
 echo ""
 
 # Counter for progress
 total_cycles=0
 
 # Loop through each base pattern
-for pattern_name in pattern0 pattern1 pattern2 pattern3; do
+for pattern_name in pattern0 pattern1 pattern2 pattern3 pattern4; do
     pattern_str="${BASE_PATTERNS[$pattern_name]}"
     echo "========================================"
     echo "Testing $pattern_name: $pattern_str"
@@ -127,7 +128,7 @@ for pattern_name in pattern0 pattern1 pattern2 pattern3; do
     PATTERN=$(get_pattern_hex "$pattern_str")
     run_test_cycle "${pattern_name}_noflip" "$PATTERN"
     total_cycles=$((total_cycles + 1))
-    echo "Progress: $total_cycles/260 cycles completed"
+    echo "Progress: $total_cycles/325 cycles completed"
     echo ""
     
     # Run bit-flip tests
@@ -138,7 +139,7 @@ for pattern_name in pattern0 pattern1 pattern2 pattern3; do
         
         # Show progress every 10 cycles
         if [ $((bit % 10)) -eq 9 ]; then
-            echo "Progress: $total_cycles/260 cycles completed"
+            echo "Progress: $total_cycles/325 cycles completed"
             echo ""
         fi
     done

@@ -4,22 +4,24 @@ Monitoring transactions (Press CTRL+C to stop)...
 
 Time(ms)    Address     Count     
 ----------------------------------
-642         0x200       PATCHING  
-654         0x1eb544    12        
-666         0x1eb550    214       
-678         0x1eb626    34        
-737         0x218       PATCHING  
-748         0x1eb544    12        
-760         0x1eb550    214       
-772         0x1eb626    34        
-831         0x210       PATCHING  
-843         0x1eb544    12        
-855         0x1eb550    214       
-867         0x1eb626    34        
-926         0x208       PATCHING  
-938         0x1eb544    12        
-950         0x1eb550    214       
-962         0x1eb626    34        
+25          0x1eb18c    80        
+642         0x208       PATCHING  
+653         0x1eb544    12        
+665         0x1eb550    214       
+677         0x1eb626    34        
+739         0x200       PATCHING  
+751         0x1eb544    12        
+763         0x1eb550    214       
+775         0x1eb626    34        
+834         0x218       PATCHING  
+846         0x1eb544    12        
+858         0x1eb550    214       
+870         0x1eb626    34        
+917         0x210       PATCHING  
+929         0x1eb544    12        
+940         0x1eb550    214       
+952         0x1eb626    34        
+1011        0x208       PATCHING  
 
 ----------------------------------
-Total transactions: 16
+Total transactions: 18

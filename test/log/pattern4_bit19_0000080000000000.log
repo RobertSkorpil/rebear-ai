@@ -1,0 +1,10 @@
+Connected to FPGA on /dev/spidev0.0
+
+Monitoring transactions (Press CTRL+C to stop)...
+
+Time(ms)    Address     Count     
+----------------------------------
+130         0xfc021d    27954     
+
+----------------------------------
+Total transactions: 1

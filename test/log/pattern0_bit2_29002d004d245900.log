@@ -4,9 +4,9 @@ Monitoring transactions (Press CTRL+C to stop)...
 
 Time(ms)    Address     Count     
 ----------------------------------
-36          0x200       PATCHING  
-48          0xfc0234    4         
-60          0xfc0238    6         
+1           0x200       PATCHING  
+13          0xfc0234    4         
+25          0xfc0238    6         
 
 ----------------------------------
 Total transactions: 3
