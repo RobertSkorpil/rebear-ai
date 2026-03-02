@@ -12,6 +12,7 @@ set(GUI_SOURCES
     widgets/transaction_viewer.cpp
     widgets/patch_editor.cpp
     widgets/hex_viewer.cpp
+    widgets/connection_dialog.cpp
     # TODO: Uncomment as implemented
     # widgets/address_visualizer.cpp
 )
@@ -22,6 +23,7 @@ set(GUI_HEADERS
     widgets/transaction_viewer.h
     widgets/patch_editor.h
     widgets/hex_viewer.h
+    widgets/connection_dialog.h
     # TODO: Uncomment as implemented
     # widgets/address_visualizer.h
 )

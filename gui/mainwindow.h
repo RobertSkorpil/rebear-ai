@@ -15,9 +15,12 @@ class QTextEdit;
 
 namespace rebear {
     class SPIProtocol;
+    class SPIProtocolNetwork;
     class PatchManager;
     class ButtonControl;
     class BufferReadyMonitor;
+    class GPIOControlNetwork;
+    class ConnectionDialog;
     struct Transaction;
     
     namespace gui {
@@ -121,6 +124,8 @@ private:
     void updateConnectionState(bool connected);
     void updateStatusBar(const QString& message);
     void logMessage(const QString& message);
+    void saveConnectionSettings();
+    void loadConnectionSettings();
     
     // Actions
     QAction* connectAction_;
@@ -159,11 +164,16 @@ private:
     rebear::gui::PatchEditor* patchEditor_;
     rebear::gui::HexViewer* hexViewer_;
     
-    // Core library objects
+    // Core library objects (local mode)
     std::unique_ptr<rebear::SPIProtocol> spi_;
     std::unique_ptr<rebear::PatchManager> patchManager_;
     std::unique_ptr<rebear::ButtonControl> buttonControl_;
     std::unique_ptr<rebear::BufferReadyMonitor> bufferMonitor_;
+    
+    // Network objects (network mode)
+    std::unique_ptr<rebear::SPIProtocolNetwork> spiNetwork_;
+    std::unique_ptr<rebear::GPIOControlNetwork> buttonNetwork_;
+    std::unique_ptr<rebear::GPIOControlNetwork> bufferMonitorNetwork_;
     
     // Polling timer for transactions
     QTimer* pollTimer_;
@@ -173,4 +183,9 @@ private:
     int transactionCount_;
     QString currentDevice_;
     uint32_t currentSpeed_;
+    
+    // Connection mode
+    bool useNetwork_;
+    QString remoteHost_;
+    uint16_t remotePort_;
 };

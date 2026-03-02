@@ -46,44 +46,6 @@ std::vector<Patch> PatchManager::getPatches() const {
     return result;
 }
 
-bool PatchManager::applyAll(SPIProtocol& spi) {
-    if (!spi.isConnected()) {
-        setError("SPI not connected");
-        return false;
-    }
-
-    if (patches_.empty()) {
-        return true; // Nothing to apply
-    }
-
-    bool allSuccess = true;
-    for (const auto& pair : patches_) {
-        if (!spi.setPatch(pair.second)) {
-            setError("Failed to apply patch " + std::to_string(pair.first) + 
-                    ": " + spi.getLastError());
-            allSuccess = false;
-        }
-    }
-
-    return allSuccess;
-}
-
-bool PatchManager::clearAll(SPIProtocol& spi) {
-    if (!spi.isConnected()) {
-        setError("SPI not connected");
-        return false;
-    }
-
-    bool success = spi.clearPatches();
-    if (!success) {
-        setError("Failed to clear FPGA patches: " + spi.getLastError());
-        return false;
-    }
-
-    patches_.clear();
-    return true;
-}
-
 void PatchManager::clearLocal() {
     patches_.clear();
 }

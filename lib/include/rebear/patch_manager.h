@@ -77,24 +77,44 @@ public:
 
     /**
      * @brief Apply all patches to FPGA
-     * 
+     *
      * Sends all patches to the FPGA via the provided SPIProtocol instance.
      * If any patch fails to apply, the operation continues with remaining patches.
-     * 
-     * @param spi Connected SPIProtocol instance
+     *
+     * @param spi Connected SPIProtocol instance (local or network)
      * @return true if all patches applied successfully, false if any failed
      */
-    bool applyAll(SPIProtocol& spi);
+    template<typename SPIType>
+    bool applyAll(SPIType& spi) {
+        bool allSuccess = true;
+        for (const auto& pair : patches_) {
+            if (pair.second.enabled) {
+                if (!spi.setPatch(pair.second)) {
+                    setError("Failed to apply patch " + std::to_string(pair.first));
+                    allSuccess = false;
+                }
+            }
+        }
+        return allSuccess;
+    }
 
     /**
      * @brief Clear all patches (local and FPGA)
-     * 
+     *
      * Removes all patches from local storage and clears them on the FPGA.
-     * 
-     * @param spi Connected SPIProtocol instance
+     *
+     * @param spi Connected SPIProtocol instance (local or network)
      * @return true if FPGA clear succeeded, false otherwise
      */
-    bool clearAll(SPIProtocol& spi);
+    template<typename SPIType>
+    bool clearAll(SPIType& spi) {
+        patches_.clear();
+        if (!spi.clearPatches()) {
+            setError("Failed to clear patches on FPGA");
+            return false;
+        }
+        return true;
+    }
 
     /**
      * @brief Clear local patches only (don't touch FPGA)

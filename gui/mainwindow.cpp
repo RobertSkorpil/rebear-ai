@@ -2,9 +2,12 @@
 #include "widgets/transaction_viewer.h"
 #include "widgets/patch_editor.h"
 #include "widgets/hex_viewer.h"
+#include "widgets/connection_dialog.h"
 #include "rebear/spi_protocol.h"
+#include "rebear/spi_protocol_network.h"
 #include "rebear/patch_manager.h"
 #include "rebear/gpio_control.h"
+#include "rebear/gpio_control_network.h"
 #include "rebear/transaction.h"
 
 #include <QAction>
@@ -23,6 +26,8 @@
 #include <QInputDialog>
 #include <QTimer>
 #include <QDateTime>
+#include <QSettings>
+#include <QThread>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -30,16 +35,16 @@ MainWindow::MainWindow(QWidget *parent)
     , transactionCount_(0)
     , currentDevice_("/dev/spidev0.0")
     , currentSpeed_(100000)
+    , useNetwork_(false)
+    , remoteHost_("raspberrypi.local")
+    , remotePort_(9876)
 {
     // Set window properties
     setWindowTitle("Rebear - Teddy Bear Reverse Engineering");
     resize(1200, 800);
     
-    // Initialize core library objects
-    spi_ = std::make_unique<rebear::SPIProtocol>();
+    // Initialize patch manager (always needed)
     patchManager_ = std::make_unique<rebear::PatchManager>();
-    buttonControl_ = std::make_unique<rebear::ButtonControl>(3);
-    bufferMonitor_ = std::make_unique<rebear::BufferReadyMonitor>(4);
     
     // Create polling timer
     pollTimer_ = new QTimer(this);
@@ -51,6 +56,9 @@ MainWindow::MainWindow(QWidget *parent)
     createToolBar();
     createStatusBar();
     createCentralWidget();
+    
+    // Load connection settings
+    loadConnectionSettings();
     
     // Initial state
     updateConnectionState(false);
@@ -67,7 +75,11 @@ MainWindow::~MainWindow()
     
     // Disconnect if connected
     if (isConnected_) {
-        spi_->close();
+        if (useNetwork_) {
+            if (spiNetwork_) spiNetwork_->close();
+        } else {
+            if (spi_) spi_->close();
+        }
     }
 }
 
@@ -280,7 +292,13 @@ void MainWindow::createCentralWidget()
     connect(patchEditor_, &rebear::gui::PatchEditor::applyAllRequested,
             this, [this]() {
                 if (!isConnected_) return;
-                if (patchManager_->applyAll(*spi_)) {
+                bool success = false;
+                if (useNetwork_) {
+                    success = patchManager_->applyAll(*spiNetwork_);
+                } else {
+                    success = patchManager_->applyAll(*spi_);
+                }
+                if (success) {
                     updateStatusBar("All patches applied");
                     logMessage("All patches applied to FPGA");
                     hexViewer_->refresh();
@@ -325,7 +343,10 @@ void MainWindow::updateConnectionState(bool connected)
     
     // Update status label
     if (connected) {
-        connectionStatusLabel_->setText(QString("Connected: %1").arg(currentDevice_));
+        QString connStr = useNetwork_
+            ? QString("Network: %1:%2").arg(remoteHost_).arg(remotePort_)
+            : QString("Local: %1").arg(currentDevice_);
+        connectionStatusLabel_->setText(connStr);
         connectionStatusLabel_->setStyleSheet("QLabel { background-color: #90EE90; }");
     } else {
         connectionStatusLabel_->setText("Disconnected");
@@ -346,17 +367,87 @@ void MainWindow::logMessage(const QString& message)
 
 void MainWindow::onConnect()
 {
-    // For now, use default device and speed
-    // In future, show settings dialog
+    // Show connection dialog
+    rebear::ConnectionDialog dialog(this);
+    dialog.setMode(useNetwork_ ? rebear::ConnectionDialog::Mode::Network
+                               : rebear::ConnectionDialog::Mode::Local);
+    dialog.setHostname(remoteHost_);
+    dialog.setPort(remotePort_);
     
-    logMessage(QString("Connecting to %1 at %2 Hz...").arg(currentDevice_).arg(currentSpeed_));
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
     
-    if (spi_->open(currentDevice_.toStdString(), currentSpeed_)) {
-        updateConnectionState(true);
-        updateStatusBar("Connected to FPGA");
+    // Get connection settings
+    useNetwork_ = (dialog.getMode() == rebear::ConnectionDialog::Mode::Network);
+    
+    if (useNetwork_) {
+        remoteHost_ = dialog.getHostname();
+        remotePort_ = dialog.getPort();
+        
+        logMessage(QString("Connecting to remote server %1:%2...")
+                  .arg(remoteHost_).arg(remotePort_));
+        
+        // Create network objects
+        spiNetwork_ = std::make_unique<rebear::SPIProtocolNetwork>(
+            remoteHost_.toStdString(), remotePort_);
+        
+        if (!spiNetwork_->open(currentDevice_.toStdString(), currentSpeed_)) {
+            QMessageBox::critical(this, "Connection Error",
+                QString("Failed to connect to remote server:\n%1")
+                .arg(QString::fromStdString(spiNetwork_->getLastError())));
+            logMessage(QString("Connection failed: %1")
+                      .arg(QString::fromStdString(spiNetwork_->getLastError())));
+            spiNetwork_.reset();
+            return;
+        }
+        
+        logMessage("Successfully connected to remote server");
+        
+        // Initialize GPIO via network
+        buttonNetwork_ = std::make_unique<rebear::GPIOControlNetwork>(
+            3, rebear::GPIOControl::Direction::Output,
+            remoteHost_.toStdString(), remotePort_);
+        
+        if (buttonNetwork_->init()) {
+            logMessage("Button control initialized (GPIO 3 via network)");
+        } else {
+            logMessage(QString("Warning: Button control failed: %1")
+                      .arg(QString::fromStdString(buttonNetwork_->getLastError())));
+        }
+        
+        bufferMonitorNetwork_ = std::make_unique<rebear::GPIOControlNetwork>(
+            4, rebear::GPIOControl::Direction::Input,
+            remoteHost_.toStdString(), remotePort_);
+        
+        if (bufferMonitorNetwork_->init()) {
+            logMessage("Buffer monitor initialized (GPIO 4 via network)");
+        } else {
+            logMessage(QString("Warning: Buffer monitor failed: %1")
+                      .arg(QString::fromStdString(bufferMonitorNetwork_->getLastError())));
+        }
+        
+    } else {
+        // Local mode
+        logMessage(QString("Connecting to local hardware %1 at %2 Hz...")
+                  .arg(currentDevice_).arg(currentSpeed_));
+        
+        spi_ = std::make_unique<rebear::SPIProtocol>();
+        
+        if (!spi_->open(currentDevice_.toStdString(), currentSpeed_)) {
+            QMessageBox::critical(this, "Connection Error",
+                QString("Failed to connect to FPGA:\n%1")
+                .arg(QString::fromStdString(spi_->getLastError())));
+            logMessage(QString("Connection failed: %1")
+                      .arg(QString::fromStdString(spi_->getLastError())));
+            spi_.reset();
+            return;
+        }
+        
         logMessage("Successfully connected to FPGA");
         
         // Initialize GPIO
+        buttonControl_ = std::make_unique<rebear::ButtonControl>(3);
         if (buttonControl_->init()) {
             logMessage("Button control initialized (GPIO 3)");
         } else {
@@ -364,24 +455,26 @@ void MainWindow::onConnect()
                       .arg(QString::fromStdString(buttonControl_->getLastError())));
         }
         
+        bufferMonitor_ = std::make_unique<rebear::BufferReadyMonitor>(4);
         if (bufferMonitor_->init()) {
             logMessage("Buffer monitor initialized (GPIO 4)");
         } else {
             logMessage(QString("Warning: Buffer monitor failed: %1")
                       .arg(QString::fromStdString(bufferMonitor_->getLastError())));
         }
-        
-        // Start polling timer (100ms interval)
-        pollTimer_->start(100);
-        
-        emit connected();
-    } else {
-        QMessageBox::critical(this, "Connection Error",
-                            QString("Failed to connect to FPGA:\n%1")
-                            .arg(QString::fromStdString(spi_->getLastError())));
-        logMessage(QString("Connection failed: %1")
-                  .arg(QString::fromStdString(spi_->getLastError())));
     }
+    
+    // Save settings if requested
+    if (dialog.shouldRemember()) {
+        saveConnectionSettings();
+    }
+    
+    // Start polling timer (100ms interval)
+    pollTimer_->start(100);
+    
+    updateConnectionState(true);
+    updateStatusBar("Connected");
+    emit connected();
 }
 
 void MainWindow::onDisconnect()
@@ -389,12 +482,34 @@ void MainWindow::onDisconnect()
     // Stop polling
     pollTimer_->stop();
     
-    // Close SPI
-    spi_->close();
+    // Close connections
+    if (useNetwork_) {
+        if (spiNetwork_) {
+            spiNetwork_->close();
+            spiNetwork_.reset();
+        }
+        if (buttonNetwork_) {
+            buttonNetwork_->close();
+            buttonNetwork_.reset();
+        }
+        if (bufferMonitorNetwork_) {
+            bufferMonitorNetwork_->close();
+            bufferMonitorNetwork_.reset();
+        }
+        logMessage("Disconnected from remote server");
+    } else {
+        if (spi_) {
+            spi_->close();
+            spi_.reset();
+        }
+        // ButtonControl and BufferReadyMonitor don't have close() - destructor handles cleanup
+        buttonControl_.reset();
+        bufferMonitor_.reset();
+        logMessage("Disconnected from FPGA");
+    }
     
     updateConnectionState(false);
-    updateStatusBar("Disconnected from FPGA");
-    logMessage("Disconnected from FPGA");
+    updateStatusBar("Disconnected");
     
     emit disconnected();
 }
@@ -403,7 +518,18 @@ void MainWindow::onClearTransactions()
 {
     if (!isConnected_) return;
     
-    if (spi_->clearTransactions()) {
+    bool success = false;
+    std::string error;
+    
+    if (useNetwork_) {
+        success = spiNetwork_->clearTransactions();
+        error = spiNetwork_->getLastError();
+    } else {
+        success = spi_->clearTransactions();
+        error = spi_->getLastError();
+    }
+    
+    if (success) {
         transactionCount_ = 0;
         transactionCountLabel_->setText("Transactions: 0");
         transactionViewer_->clear();
@@ -412,9 +538,9 @@ void MainWindow::onClearTransactions()
     } else {
         QMessageBox::warning(this, "Clear Failed",
                            QString("Failed to clear transactions:\n%1")
-                           .arg(QString::fromStdString(spi_->getLastError())));
+                           .arg(QString::fromStdString(error)));
         logMessage(QString("Clear failed: %1")
-                  .arg(QString::fromStdString(spi_->getLastError())));
+                  .arg(QString::fromStdString(error)));
     }
 }
 
@@ -422,10 +548,33 @@ void MainWindow::onPollTransactions()
 {
     if (!isConnected_) return;
     
+    // Check buffer ready
+    bool ready = false;
+    if (useNetwork_) {
+        if (bufferMonitorNetwork_) {
+            ready = bufferMonitorNetwork_->read();
+        }
+    } else {
+        if (bufferMonitor_) {
+            ready = bufferMonitor_->isReady();
+        }
+    }
+    
+    if (!ready) {
+        return;
+    }
+    
     // Read ALL available transactions in the buffer
     // Keep reading while buffer has data
-    while (bufferMonitor_->isReady()) {
-        auto trans = spi_->readTransaction();
+    while (true) {
+        std::optional<rebear::Transaction> trans;
+        
+        if (useNetwork_) {
+            trans = spiNetwork_->readTransaction();
+        } else {
+            trans = spi_->readTransaction();
+        }
+        
         if (trans && trans->address != 0xFFFFFF) {
             transactionCount_++;
             transactionCountLabel_->setText(QString("Transactions: %1").arg(transactionCount_));
@@ -600,4 +749,25 @@ void MainWindow::onAbout()
 void MainWindow::onConnectionStatusChanged()
 {
     // Placeholder for future use
+}
+
+void MainWindow::saveConnectionSettings()
+{
+    QSettings settings("Rebear", "RebearGUI");
+    settings.setValue("connection/mode", useNetwork_ ? "network" : "local");
+    settings.setValue("connection/host", remoteHost_);
+    settings.setValue("connection/port", remotePort_);
+    settings.setValue("connection/device", currentDevice_);
+    settings.setValue("connection/speed", currentSpeed_);
+}
+
+void MainWindow::loadConnectionSettings()
+{
+    QSettings settings("Rebear", "RebearGUI");
+    QString mode = settings.value("connection/mode", "local").toString();
+    useNetwork_ = (mode == "network");
+    remoteHost_ = settings.value("connection/host", "raspberrypi.local").toString();
+    remotePort_ = settings.value("connection/port", 9876).toUInt();
+    currentDevice_ = settings.value("connection/device", "/dev/spidev0.0").toString();
+    currentSpeed_ = settings.value("connection/speed", 100000).toUInt();
 }

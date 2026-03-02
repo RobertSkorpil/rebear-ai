@@ -2,9 +2,12 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <memory>
 #include "rebear/spi_protocol.h"
+#include "rebear/spi_protocol_network.h"
 #include "rebear/patch_manager.h"
 #include "rebear/gpio_control.h"
+#include "rebear/gpio_control_network.h"
 #include "rebear/transaction.h"
 #include <chrono>
 #include <thread>
@@ -17,9 +20,43 @@
 // Global flag for signal handling
 std::atomic<bool> g_running{true};
 
+// Global network mode settings
+std::string g_remote_host;
+uint16_t g_remote_port = 9876;
+bool g_use_network = false;
+
 void signalHandler(int /* signum */) {
     g_running.store(false, std::memory_order_relaxed);
 }
+
+// Helper function to parse remote connection string
+// Format: tcp://hostname:port or hostname:port
+bool parseRemoteString(const std::string& remote, std::string& host, uint16_t& port) {
+    std::string conn = remote;
+    
+    // Remove tcp:// prefix if present
+    if (conn.substr(0, 6) == "tcp://") {
+        conn = conn.substr(6);
+    }
+    
+    // Find colon separator
+    size_t colon_pos = conn.find(':');
+    if (colon_pos == std::string::npos) {
+        // No port specified, use default
+        host = conn;
+        port = 9876;
+        return true;
+    }
+    
+    host = conn.substr(0, colon_pos);
+    try {
+        port = static_cast<uint16_t>(std::stoul(conn.substr(colon_pos + 1)));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 
 // Helper function to parse hex string to bytes
 std::vector<uint8_t> parseHexString(const std::string& hex) {
@@ -46,36 +83,9 @@ uint32_t parseAddress(const std::string& addr) {
     return std::stoul(cleanAddr, nullptr, 16);
 }
 
-// Command: monitor
-int cmdMonitor(int argc, char* argv[]) {
-    std::string device = "/dev/spidev0.0";
-    uint32_t speed = 100000;
-    int duration = -1; // -1 = continuous
-    std::string format = "text";
-    
-    // Parse arguments
-    for (int i = 2; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "--device" && i + 1 < argc) {
-            device = argv[++i];
-        } else if (arg == "--speed" && i + 1 < argc) {
-            speed = std::stoul(argv[++i]);
-        } else if (arg == "--duration" && i + 1 < argc) {
-            duration = std::stoi(argv[++i]);
-        } else if (arg == "--format" && i + 1 < argc) {
-            format = argv[++i];
-        }
-    }
-    
-    // Connect to FPGA
-    rebear::SPIProtocol spi;
-    if (!spi.open(device, speed)) {
-        std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
-        return 1;
-    }
-    
-    std::cout << "Connected to FPGA on " << device << std::endl;
-    
+// Template implementation for monitor command (works with both local and network SPI)
+template<typename SPIType>
+int cmdMonitorImpl(SPIType& spi, int duration, const std::string& format) {
     // Setup signal handler
     signal(SIGINT, signalHandler);
     
@@ -85,8 +95,8 @@ int cmdMonitor(int argc, char* argv[]) {
     
     if (format == "text") {
         std::cout << "\nMonitoring transactions (Press CTRL+C to stop)...\n" << std::endl;
-        std::cout << std::left << std::setw(12) << "Time(ms)" 
-                  << std::setw(12) << "Address" 
+        std::cout << std::left << std::setw(12) << "Time(ms)"
+                  << std::setw(12) << "Address"
                   << std::setw(10) << "Count" << std::endl;
         std::cout << std::string(34, '-') << std::endl;
     }
@@ -163,7 +173,7 @@ int cmdMonitor(int argc, char* argv[]) {
                 if (t.address < minAddr) minAddr = t.address;
                 if (t.address > maxAddr) maxAddr = t.address;
             }
-            std::cout << "    \"address_range\": {\"min\": \"0x" << std::hex << minAddr 
+            std::cout << "    \"address_range\": {\"min\": \"0x" << std::hex << minAddr
                       << "\", \"max\": \"0x" << maxAddr << std::dec << "\"}" << std::endl;
         }
         
@@ -178,18 +188,50 @@ int cmdMonitor(int argc, char* argv[]) {
     return 0;
 }
 
-// Command: patch
-int cmdPatch(int argc, char* argv[]) {
-    if (argc < 3) {
-        std::cerr << "Usage: rebear-cli patch <subcommand> [options]" << std::endl;
-        std::cerr << "Subcommands: set, list, clear, load, save" << std::endl;
-        return 1;
-    }
-    
-    std::string subcommand = argv[2];
+// Command: monitor
+int cmdMonitor(int argc, char* argv[]) {
     std::string device = "/dev/spidev0.0";
     uint32_t speed = 100000;
+    int duration = -1; // -1 = continuous
+    std::string format = "text";
     
+    // Parse arguments
+    for (int i = 2; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--device" && i + 1 < argc) {
+            device = argv[++i];
+        } else if (arg == "--speed" && i + 1 < argc) {
+            speed = std::stoul(argv[++i]);
+        } else if (arg == "--duration" && i + 1 < argc) {
+            duration = std::stoi(argv[++i]);
+        } else if (arg == "--format" && i + 1 < argc) {
+            format = argv[++i];
+        }
+    }
+    
+    // Connect to FPGA (local or network)
+    if (g_use_network) {
+        rebear::SPIProtocolNetwork spi(g_remote_host, g_remote_port);
+        if (!spi.open(device, speed)) {
+            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
+            return 1;
+        }
+        std::cout << "Connected to FPGA via " << g_remote_host << ":" << g_remote_port << std::endl;
+        return cmdMonitorImpl(spi, duration, format);
+    } else {
+        rebear::SPIProtocol spi;
+        if (!spi.open(device, speed)) {
+            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
+            return 1;
+        }
+        std::cout << "Connected to FPGA on " << device << std::endl;
+        return cmdMonitorImpl(spi, duration, format);
+    }
+}
+
+// Template implementation for patch command (works with both local and network SPI)
+template<typename SPIType>
+int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* argv[]) {
     rebear::PatchManager patchMgr;
     
     if (subcommand == "set") {
@@ -207,7 +249,8 @@ int cmdPatch(int argc, char* argv[]) {
             } else if (arg == "--data" && i + 1 < argc) {
                 dataStr = argv[++i];
             } else if (arg == "--device" && i + 1 < argc) {
-                device = argv[++i];
+                // Skip device argument, already handled
+                ++i;
             }
         }
         
@@ -234,19 +277,13 @@ int cmdPatch(int argc, char* argv[]) {
         }
         
         // Apply to FPGA
-        rebear::SPIProtocol spi;
-        if (!spi.open(device, speed)) {
-            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
-            return 1;
-        }
-        
         if (!patchMgr.applyAll(spi)) {
             std::cerr << "Error: Failed to apply patch: " << patchMgr.getLastError() << std::endl;
             spi.close();
             return 1;
         }
         
-        std::cout << "Patch " << static_cast<int>(id) << " set at address 0x" 
+        std::cout << "Patch " << static_cast<int>(id) << " set at address 0x"
                   << std::hex << address << std::dec << std::endl;
         
         spi.close();
@@ -283,10 +320,10 @@ int cmdPatch(int argc, char* argv[]) {
                           << ", \"address\": \"0x" << std::hex << p.address << std::dec
                           << "\", \"data\": \"";
                 for (const auto& byte : p.data) {
-                    std::cout << std::hex << std::setw(2) << std::setfill('0') 
+                    std::cout << std::hex << std::setw(2) << std::setfill('0')
                               << static_cast<int>(byte);
                 }
-                std::cout << std::dec << "\", \"enabled\": " 
+                std::cout << std::dec << "\", \"enabled\": "
                           << (p.enabled ? "true" : "false") << "}";
                 if (i < patches.size() - 1) {
                     std::cout << ",";
@@ -298,9 +335,9 @@ int cmdPatch(int argc, char* argv[]) {
             std::cout << "}" << std::endl;
         } else {
             std::cout << "Active patches:" << std::endl;
-            std::cout << std::left << std::setw(6) << "ID" 
-                      << std::setw(12) << "Address" 
-                      << std::setw(20) << "Data" 
+            std::cout << std::left << std::setw(6) << "ID"
+                      << std::setw(12) << "Address"
+                      << std::setw(20) << "Data"
                       << "Status" << std::endl;
             std::cout << std::string(50, '-') << std::endl;
             
@@ -308,7 +345,7 @@ int cmdPatch(int argc, char* argv[]) {
                 std::cout << std::left << std::setw(6) << static_cast<int>(p.id)
                           << "0x" << std::hex << std::setw(10) << p.address << std::dec;
                 for (const auto& byte : p.data) {
-                    std::cout << std::hex << std::setw(2) << std::setfill('0') 
+                    std::cout << std::hex << std::setw(2) << std::setfill('0')
                               << static_cast<int>(byte);
                 }
                 std::cout << std::dec << "  " << (p.enabled ? "Active" : "Disabled") << std::endl;
@@ -328,14 +365,9 @@ int cmdPatch(int argc, char* argv[]) {
             } else if (arg == "--id" && i + 1 < argc) {
                 id = std::stoi(argv[++i]);
             } else if (arg == "--device" && i + 1 < argc) {
-                device = argv[++i];
+                // Skip device argument, already handled
+                ++i;
             }
-        }
-        
-        rebear::SPIProtocol spi;
-        if (!spi.open(device, speed)) {
-            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
-            return 1;
         }
         
         if (clearAll) {
@@ -371,7 +403,8 @@ int cmdPatch(int argc, char* argv[]) {
             if (arg == "--file" && i + 1 < argc) {
                 filename = argv[++i];
             } else if (arg == "--device" && i + 1 < argc) {
-                device = argv[++i];
+                // Skip device argument, already handled
+                ++i;
             }
         }
         
@@ -382,12 +415,6 @@ int cmdPatch(int argc, char* argv[]) {
         
         if (!patchMgr.loadFromFile(filename)) {
             std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
-            return 1;
-        }
-        
-        rebear::SPIProtocol spi;
-        if (!spi.open(device, speed)) {
-            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
             return 1;
         }
         
@@ -431,39 +458,65 @@ int cmdPatch(int argc, char* argv[]) {
     return 0;
 }
 
-// Command: button
-int cmdButton(int argc, char* argv[]) {
+// Command: patch
+int cmdPatch(int argc, char* argv[]) {
     if (argc < 3) {
-        std::cerr << "Usage: rebear-cli button <subcommand> [options]" << std::endl;
-        std::cerr << "Subcommands: press, release, click, status" << std::endl;
+        std::cerr << "Usage: rebear-cli patch <subcommand> [options]" << std::endl;
+        std::cerr << "Subcommands: set, list, clear, load, save" << std::endl;
         return 1;
     }
     
     std::string subcommand = argv[2];
-    int duration = 100; // Default 100ms
+    std::string device = "/dev/spidev0.0";
+    uint32_t speed = 100000;
     
-    rebear::ButtonControl button(3);
-    
-    if (!button.init()) {
-        std::cerr << "Error: Failed to initialize button control: " << button.getLastError() << std::endl;
-        return 1;
+    // Parse device argument
+    for (int i = 3; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--device" && i + 1 < argc) {
+            device = argv[i + 1];
+            break;
+        }
     }
     
+    // Connect to FPGA (local or network)
+    if (g_use_network) {
+        rebear::SPIProtocolNetwork spi(g_remote_host, g_remote_port);
+        if (!spi.open(device, speed)) {
+            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
+            return 1;
+        }
+        return cmdPatchImpl(spi, subcommand, argc, argv);
+    } else {
+        rebear::SPIProtocol spi;
+        if (!spi.open(device, speed)) {
+            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
+            return 1;
+        }
+        return cmdPatchImpl(spi, subcommand, argc, argv);
+    }
+}
+
+// Template implementation for button command (works with both local and network GPIO)
+template<typename GPIOType>
+int cmdButtonImpl(GPIOType& gpio, const std::string& subcommand, int argc, char* argv[]) {
     if (subcommand == "press") {
-        if (!button.press()) {
-            std::cerr << "Error: " << button.getLastError() << std::endl;
+        if (!gpio.write(true)) {
+            std::cerr << "Error: " << gpio.getLastError() << std::endl;
             return 1;
         }
         std::cout << "Button pressed" << std::endl;
         
     } else if (subcommand == "release") {
-        if (!button.release()) {
-            std::cerr << "Error: " << button.getLastError() << std::endl;
+        if (!gpio.write(false)) {
+            std::cerr << "Error: " << gpio.getLastError() << std::endl;
             return 1;
         }
         std::cout << "Button released" << std::endl;
         
     } else if (subcommand == "click") {
+        int duration = 100; // Default 100ms
+        
         for (int i = 3; i < argc; i++) {
             std::string arg = argv[i];
             if (arg == "--duration" && i + 1 < argc) {
@@ -471,14 +524,20 @@ int cmdButton(int argc, char* argv[]) {
             }
         }
         
-        if (!button.click(duration)) {
-            std::cerr << "Error: " << button.getLastError() << std::endl;
+        if (!gpio.write(true)) {
+            std::cerr << "Error: " << gpio.getLastError() << std::endl;
+            return 1;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(duration));
+        if (!gpio.write(false)) {
+            std::cerr << "Error: " << gpio.getLastError() << std::endl;
             return 1;
         }
         std::cout << "Button clicked (" << duration << "ms)" << std::endl;
         
     } else if (subcommand == "status") {
-        std::cout << "Button status: " << (button.isPressed() ? "Pressed" : "Released") << std::endl;
+        bool pressed = gpio.read();
+        std::cout << "Button status: " << (pressed ? "Pressed" : "Released") << std::endl;
         
     } else {
         std::cerr << "Unknown subcommand: " << subcommand << std::endl;
@@ -488,39 +547,38 @@ int cmdButton(int argc, char* argv[]) {
     return 0;
 }
 
-// Command: export
-int cmdExport(int argc, char* argv[]) {
-    std::string device = "/dev/spidev0.0";
-    uint32_t speed = 100000;
-    std::string output;
-    std::string format = "csv";
-    int duration = 10; // Default 10 seconds
+// Command: button
+int cmdButton(int argc, char* argv[]) {
+    if (argc < 3) {
+        std::cerr << "Usage: rebear-cli button <subcommand> [options]" << std::endl;
+        std::cerr << "Subcommands: press, release, click, status" << std::endl;
+        return 1;
+    }
     
-    for (int i = 2; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "--output" && i + 1 < argc) {
-            output = argv[++i];
-        } else if (arg == "--format" && i + 1 < argc) {
-            format = argv[++i];
-        } else if (arg == "--device" && i + 1 < argc) {
-            device = argv[++i];
-        } else if (arg == "--duration" && i + 1 < argc) {
-            duration = std::stoi(argv[++i]);
+    std::string subcommand = argv[2];
+    
+    // Connect to GPIO (local or network)
+    if (g_use_network) {
+        rebear::GPIOControlNetwork gpio(3, rebear::GPIOControl::Direction::Output,
+                                        g_remote_host, g_remote_port);
+        if (!gpio.init()) {
+            std::cerr << "Error: Failed to initialize button control: " << gpio.getLastError() << std::endl;
+            return 1;
         }
+        return cmdButtonImpl(gpio, subcommand, argc, argv);
+    } else {
+        rebear::GPIOControl gpio(3, rebear::GPIOControl::Direction::Output);
+        if (!gpio.init()) {
+            std::cerr << "Error: Failed to initialize button control: " << gpio.getLastError() << std::endl;
+            return 1;
+        }
+        return cmdButtonImpl(gpio, subcommand, argc, argv);
     }
-    
-    if (output.empty()) {
-        std::cerr << "Error: --output required" << std::endl;
-        return 1;
-    }
-    
-    // Connect and collect transactions
-    rebear::SPIProtocol spi;
-    if (!spi.open(device, speed)) {
-        std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
-        return 1;
-    }
-    
+}
+
+// Template implementation for export command (works with both local and network SPI)
+template<typename SPIType>
+int cmdExportImpl(SPIType& spi, const std::string& output, const std::string& format, int duration) {
     std::cout << "Collecting transactions for " << duration << " seconds..." << std::endl;
     
     std::vector<rebear::Transaction> transactions;
@@ -599,24 +657,53 @@ int cmdExport(int argc, char* argv[]) {
     return 0;
 }
 
-// Command: clear
-int cmdClear(int argc, char* argv[]) {
+// Command: export
+int cmdExport(int argc, char* argv[]) {
     std::string device = "/dev/spidev0.0";
     uint32_t speed = 100000;
+    std::string output;
+    std::string format = "csv";
+    int duration = 10; // Default 10 seconds
     
     for (int i = 2; i < argc; i++) {
         std::string arg = argv[i];
-        if (arg == "--device" && i + 1 < argc) {
+        if (arg == "--output" && i + 1 < argc) {
+            output = argv[++i];
+        } else if (arg == "--format" && i + 1 < argc) {
+            format = argv[++i];
+        } else if (arg == "--device" && i + 1 < argc) {
             device = argv[++i];
+        } else if (arg == "--duration" && i + 1 < argc) {
+            duration = std::stoi(argv[++i]);
         }
     }
     
-    rebear::SPIProtocol spi;
-    if (!spi.open(device, speed)) {
-        std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
+    if (output.empty()) {
+        std::cerr << "Error: --output required" << std::endl;
         return 1;
     }
     
+    // Connect to FPGA (local or network)
+    if (g_use_network) {
+        rebear::SPIProtocolNetwork spi(g_remote_host, g_remote_port);
+        if (!spi.open(device, speed)) {
+            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
+            return 1;
+        }
+        return cmdExportImpl(spi, output, format, duration);
+    } else {
+        rebear::SPIProtocol spi;
+        if (!spi.open(device, speed)) {
+            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
+            return 1;
+        }
+        return cmdExportImpl(spi, output, format, duration);
+    }
+}
+
+// Template implementation for clear command (works with both local and network SPI)
+template<typename SPIType>
+int cmdClearImpl(SPIType& spi) {
     if (!spi.clearTransactions()) {
         std::cerr << "Error: Failed to clear transactions: " << spi.getLastError() << std::endl;
         spi.close();
@@ -629,11 +716,44 @@ int cmdClear(int argc, char* argv[]) {
     return 0;
 }
 
+// Command: clear
+int cmdClear(int argc, char* argv[]) {
+    std::string device = "/dev/spidev0.0";
+    uint32_t speed = 100000;
+    
+    for (int i = 2; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--device" && i + 1 < argc) {
+            device = argv[++i];
+        }
+    }
+    
+    // Connect to FPGA (local or network)
+    if (g_use_network) {
+        rebear::SPIProtocolNetwork spi(g_remote_host, g_remote_port);
+        if (!spi.open(device, speed)) {
+            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
+            return 1;
+        }
+        return cmdClearImpl(spi);
+    } else {
+        rebear::SPIProtocol spi;
+        if (!spi.open(device, speed)) {
+            std::cerr << "Error: Failed to open SPI device: " << spi.getLastError() << std::endl;
+            return 1;
+        }
+        return cmdClearImpl(spi);
+    }
+}
+
 // Command: help
 void printHelp() {
     std::cout << "Rebear CLI - Teddy Bear Reverse Engineering Tool\n" << std::endl;
-    std::cout << "Usage: rebear-cli <command> [options]\n" << std::endl;
-    std::cout << "Commands:" << std::endl;
+    std::cout << "Usage: rebear-cli [--remote <host[:port]>] <command> [options]\n" << std::endl;
+    std::cout << "Global Options:" << std::endl;
+    std::cout << "  --remote <host[:port]>  Connect to remote rebear-server (default port: 9876)" << std::endl;
+    std::cout << "                          Format: hostname:port or tcp://hostname:port" << std::endl;
+    std::cout << "\nCommands:" << std::endl;
     std::cout << "  monitor     Monitor transactions in real-time" << std::endl;
     std::cout << "  patch       Manage patches (set, list, clear, load, save)" << std::endl;
     std::cout << "  button      Control teddy bear button (press, release, click, status)" << std::endl;
@@ -641,10 +761,13 @@ void printHelp() {
     std::cout << "  clear       Clear transaction buffer" << std::endl;
     std::cout << "  help        Show this help message" << std::endl;
     std::cout << "\nExamples:" << std::endl;
+    std::cout << "  # Local mode (direct hardware access)" << std::endl;
     std::cout << "  rebear-cli monitor --duration 30" << std::endl;
     std::cout << "  rebear-cli patch set --id 0 --address 0x001000 --data 0102030405060708" << std::endl;
-    std::cout << "  rebear-cli button click --duration 100" << std::endl;
-    std::cout << "  rebear-cli export --output log.csv --format csv" << std::endl;
+    std::cout << "\n  # Network mode (remote hardware access)" << std::endl;
+    std::cout << "  rebear-cli --remote raspberrypi.local monitor --duration 30" << std::endl;
+    std::cout << "  rebear-cli --remote tcp://192.168.1.100:9876 button click" << std::endl;
+    std::cout << "  rebear-cli --remote pi3:9876 export --output log.csv" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -653,18 +776,50 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    std::string command = argv[1];
+    // Parse global --remote flag
+    int cmd_start = 1;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--remote" && i + 1 < argc) {
+            std::string remote = argv[i + 1];
+            if (!parseRemoteString(remote, g_remote_host, g_remote_port)) {
+                std::cerr << "Error: Invalid remote connection string: " << remote << std::endl;
+                std::cerr << "Format: hostname:port or tcp://hostname:port" << std::endl;
+                return 1;
+            }
+            g_use_network = true;
+            cmd_start = i + 2;
+            break;
+        } else if (arg.substr(0, 2) != "--") {
+            // Found command
+            cmd_start = i;
+            break;
+        }
+    }
+    
+    if (cmd_start >= argc) {
+        std::cerr << "Error: No command specified" << std::endl;
+        printHelp();
+        return 1;
+    }
+    
+    std::string command = argv[cmd_start];
+    
+    // Shift arguments for command functions
+    int new_argc = argc - cmd_start + 1;
+    char** new_argv = argv + cmd_start - 1;
+    new_argv[0] = argv[0]; // Keep program name
     
     if (command == "monitor") {
-        return cmdMonitor(argc, argv);
+        return cmdMonitor(new_argc, new_argv);
     } else if (command == "patch") {
-        return cmdPatch(argc, argv);
+        return cmdPatch(new_argc, new_argv);
     } else if (command == "button") {
-        return cmdButton(argc, argv);
+        return cmdButton(new_argc, new_argv);
     } else if (command == "export") {
-        return cmdExport(argc, argv);
+        return cmdExport(new_argc, new_argv);
     } else if (command == "clear") {
-        return cmdClear(argc, argv);
+        return cmdClear(new_argc, new_argv);
     } else if (command == "help" || command == "--help" || command == "-h") {
         printHelp();
         return 0;
