@@ -25,8 +25,73 @@ std::string g_remote_host;
 uint16_t g_remote_port = 9876;
 bool g_use_network = false;
 
+// Global debug settings
+bool g_verbose = false;
+bool g_dry_run = false;
+
 void signalHandler(int /* signum */) {
     g_running.store(false, std::memory_order_relaxed);
+}
+
+// Helper to print hex data
+void printHexData(const std::string& label, const std::vector<uint8_t>& data) {
+    std::cout << label << " (" << data.size() << " bytes): ";
+    for (size_t i = 0; i < data.size(); ++i) {
+        if (i > 0 && i % 16 == 0) {
+            std::cout << "\n" << std::string(label.length() + 2, ' ');
+        }
+        std::cout << std::hex << std::setw(2) << std::setfill('0') 
+                  << static_cast<int>(data[i]) << " ";
+    }
+    std::cout << std::dec << std::endl;
+}
+
+// Helper to build patch buffer (for verbose/dry-run display)
+std::vector<uint8_t> buildPatchBuffer(const std::vector<rebear::Patch>& patches) {
+    std::vector<uint8_t> buffer;
+    
+    if (patches.empty()) {
+        return buffer;
+    }
+    
+    // Command byte
+    buffer.push_back(0x02); // CMD_SET_PATCH
+    
+    // Calculate data section start offset
+    size_t dataOffset = (patches.size() * 8) + 1;
+    size_t currentDataOffset = dataOffset;
+    
+    // Write patch headers
+    for (const auto& patch : patches) {
+        // STORED (1 byte)
+        buffer.push_back(patch.enabled ? 0x80 : 0x00);
+        
+        // PATCH_ADDRESS (3 bytes, big-endian)
+        buffer.push_back((patch.address >> 16) & 0xFF);
+        buffer.push_back((patch.address >> 8) & 0xFF);
+        buffer.push_back(patch.address & 0xFF);
+        
+        // PATCH_LENGTH (2 bytes, big-endian)
+        uint16_t length = static_cast<uint16_t>(patch.data.size());
+        buffer.push_back((length >> 8) & 0xFF);
+        buffer.push_back(length & 0xFF);
+        
+        // BUFFER_DATA offset (2 bytes, big-endian)
+        buffer.push_back((currentDataOffset >> 8) & 0xFF);
+        buffer.push_back(currentDataOffset & 0xFF);
+        
+        currentDataOffset += patch.data.size();
+    }
+    
+    // Terminator
+    buffer.push_back(0x00);
+    
+    // Write patch data
+    for (const auto& patch : patches) {
+        buffer.insert(buffer.end(), patch.data.begin(), patch.data.end());
+    }
+    
+    return buffer;
 }
 
 // Helper function to parse remote connection string
@@ -254,13 +319,18 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
             }
         }
         
-        if (dataStr.empty() || dataStr.length() != 16) {
-            std::cerr << "Error: --data must be 16 hex characters (8 bytes)" << std::endl;
+        if (dataStr.empty()) {
+            std::cerr << "Error: --data required (hex string, e.g., 0102030405060708 for 8 bytes)" << std::endl;
+            return 1;
+        }
+        
+        if (dataStr.length() % 2 != 0) {
+            std::cerr << "Error: --data must be even number of hex characters" << std::endl;
             return 1;
         }
         
         auto dataBytes = parseHexString(dataStr);
-        if (dataBytes.size() != 8) {
+        if (dataBytes.empty()) {
             std::cerr << "Error: Invalid hex data" << std::endl;
             return 1;
         }
@@ -268,12 +338,65 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
         rebear::Patch patch;
         patch.id = id;
         patch.address = address;
-        std::copy(dataBytes.begin(), dataBytes.end(), patch.data.begin());
+        patch.data = dataBytes;  // Variable length
         patch.enabled = true;
         
         if (!patchMgr.addPatch(patch)) {
             std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
             return 1;
+        }
+        
+        // Show verbose info if requested
+        if (g_verbose || g_dry_run) {
+            std::cout << "\n=== Patch Configuration ===" << std::endl;
+            std::cout << "Patch ID: " << static_cast<int>(id) << std::endl;
+            std::cout << "Address: 0x" << std::hex << address << std::dec << std::endl;
+            std::cout << "Data length: " << dataBytes.size() << " bytes" << std::endl;
+            std::cout << "Enabled: " << (patch.enabled ? "yes" : "no") << std::endl;
+            
+            // Build and show the SPI buffer
+            std::vector<rebear::Patch> patchList = {patch};
+            auto buffer = buildPatchBuffer(patchList);
+            
+            std::cout << "\n=== SPI Buffer (before escape encoding) ===" << std::endl;
+            printHexData("Raw buffer", buffer);
+            
+            // Show header breakdown
+            std::cout << "\n=== Buffer Structure ===" << std::endl;
+            std::cout << "Command byte: 0x" << std::hex << std::setw(2) << std::setfill('0') 
+                      << static_cast<int>(buffer[0]) << std::dec << " (CMD_SET_PATCH)" << std::endl;
+            std::cout << "\nPatch Header:" << std::endl;
+            std::cout << "  STORED:       0x" << std::hex << std::setw(2) << std::setfill('0') 
+                      << static_cast<int>(buffer[1]) << std::dec 
+                      << (buffer[1] == 0x80 ? " (enabled)" : " (disabled)") << std::endl;
+            std::cout << "  ADDRESS:      0x" << std::hex << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(buffer[2]) << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(buffer[3]) << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(buffer[4]) << std::dec << std::endl;
+            std::cout << "  LENGTH:       0x" << std::hex << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(buffer[5]) << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(buffer[6]) << std::dec 
+                      << " (" << dataBytes.size() << " bytes)" << std::endl;
+            std::cout << "  DATA_OFFSET:  0x" << std::hex << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(buffer[7]) << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(buffer[8]) << std::dec << std::endl;
+            std::cout << "\nTerminator: 0x" << std::hex << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(buffer[9]) << std::dec << std::endl;
+            std::cout << "\nPatch Data (" << dataBytes.size() << " bytes at offset " 
+                      << ((buffer[7] << 8) | buffer[8]) << "):" << std::endl;
+            std::cout << "  ";
+            for (size_t i = 0; i < dataBytes.size(); ++i) {
+                if (i > 0 && i % 16 == 0) std::cout << "\n  ";
+                std::cout << std::hex << std::setw(2) << std::setfill('0') 
+                          << static_cast<int>(dataBytes[i]) << " ";
+            }
+            std::cout << std::dec << std::endl;
+        }
+        
+        // If dry-run, stop here
+        if (g_dry_run) {
+            std::cout << "\n[DRY RUN] Patch not sent to FPGA" << std::endl;
+            return 0;
         }
         
         // Apply to FPGA
@@ -283,7 +406,7 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
             return 1;
         }
         
-        std::cout << "Patch " << static_cast<int>(id) << " set at address 0x"
+        std::cout << "\nPatch " << static_cast<int>(id) << " set at address 0x"
                   << std::hex << address << std::dec << std::endl;
         
         spi.close();
@@ -749,10 +872,12 @@ int cmdClear(int argc, char* argv[]) {
 // Command: help
 void printHelp() {
     std::cout << "Rebear CLI - Teddy Bear Reverse Engineering Tool\n" << std::endl;
-    std::cout << "Usage: rebear-cli [--remote <host[:port]>] <command> [options]\n" << std::endl;
+    std::cout << "Usage: rebear-cli [options] <command> [command-options]\n" << std::endl;
     std::cout << "Global Options:" << std::endl;
     std::cout << "  --remote <host[:port]>  Connect to remote rebear-server (default port: 9876)" << std::endl;
     std::cout << "                          Format: hostname:port or tcp://hostname:port" << std::endl;
+    std::cout << "  -v, --verbose           Show raw SPI data being sent (hex format)" << std::endl;
+    std::cout << "  --dry, --dry-run        Show data to be sent but don't actually send it" << std::endl;
     std::cout << "\nCommands:" << std::endl;
     std::cout << "  monitor     Monitor transactions in real-time" << std::endl;
     std::cout << "  patch       Manage patches (set, list, clear, load, save)" << std::endl;
@@ -764,10 +889,19 @@ void printHelp() {
     std::cout << "  # Local mode (direct hardware access)" << std::endl;
     std::cout << "  rebear-cli monitor --duration 30" << std::endl;
     std::cout << "  rebear-cli patch set --id 0 --address 0x001000 --data 0102030405060708" << std::endl;
+    std::cout << "  rebear-cli patch set --id 1 --address 0x002000 --data DEADBEEF" << std::endl;
+    std::cout << "  rebear-cli patch set --id 2 --address 0x003000 --data $(cat data.hex)" << std::endl;
     std::cout << "\n  # Network mode (remote hardware access)" << std::endl;
     std::cout << "  rebear-cli --remote raspberrypi.local monitor --duration 30" << std::endl;
     std::cout << "  rebear-cli --remote tcp://192.168.1.100:9876 button click" << std::endl;
     std::cout << "  rebear-cli --remote pi3:9876 export --output log.csv" << std::endl;
+    std::cout << "\n  # Patch data can be variable length (1 byte to ~16KB)" << std::endl;
+    std::cout << "  rebear-cli patch set --id 0 --address 0x1000 --data FF        # 1 byte" << std::endl;
+    std::cout << "  rebear-cli patch set --id 1 --address 0x2000 --data DEADBEEF  # 4 bytes" << std::endl;
+    std::cout << "\n  # Verbose and dry-run modes" << std::endl;
+    std::cout << "  rebear-cli -v patch set --id 0 --address 0x1000 --data DEADBEEF" << std::endl;
+    std::cout << "  rebear-cli --dry patch set --id 0 --address 0x1000 --data DEADBEEF" << std::endl;
+    std::cout << "  rebear-cli -v --dry patch set --id 0 --address 0x1000 --data DEADBEEF" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -776,7 +910,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // Parse global --remote flag
+    // Parse global flags
     int cmd_start = 1;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -788,9 +922,12 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             g_use_network = true;
-            cmd_start = i + 2;
-            break;
-        } else if (arg.substr(0, 2) != "--") {
+            i++; // Skip next arg
+        } else if (arg == "-v" || arg == "--verbose") {
+            g_verbose = true;
+        } else if (arg == "--dry" || arg == "--dry-run") {
+            g_dry_run = true;
+        } else if (arg.substr(0, 2) != "--" && arg[0] != '-') {
             // Found command
             cmd_start = i;
             break;
