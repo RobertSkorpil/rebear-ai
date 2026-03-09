@@ -219,6 +219,87 @@ bool SPIProtocol::uploadPatchBuffer(const std::vector<Patch>& patches) {
     return transfer(encoded, dummy, 0);
 }
 
+bool SPIProtocol::uploadPatchBufferVerbose(const std::vector<Patch>& patches, std::vector<uint8_t>& misoData) {
+    if (!isConnected()) {
+        setError("SPI device not connected");
+        return false;
+    }
+    
+    // Hardware limitation: maximum 8 patch headers
+    if (patches.size() > MAX_PATCHES_PER_BUFFER) {
+        setError("Too many patches: hardware supports maximum " + 
+                 std::to_string(MAX_PATCHES_PER_BUFFER) + " patches per buffer (got " + 
+                 std::to_string(patches.size()) + ")");
+        return false;
+    }
+    
+    // Validate all patches
+    for (const auto& patch : patches) {
+        if (!patch.isValid()) {
+            setError("Invalid patch configuration in buffer");
+            return false;
+        }
+    }
+    
+    // Build patch buffer (same as uploadPatchBuffer)
+    std::vector<uint8_t> buffer;
+    buffer.push_back(CMD_SET_PATCH);
+    
+    size_t dataOffset = (patches.size() * 8) + 1;
+    size_t currentDataOffset = dataOffset;
+    
+    for (const auto& patch : patches) {
+        buffer.push_back(patch.enabled ? 0x80 : 0x00);
+        buffer.push_back((patch.address >> 16) & 0xFF);
+        buffer.push_back((patch.address >> 8) & 0xFF);
+        buffer.push_back(patch.address & 0xFF);
+        
+        uint16_t length = static_cast<uint16_t>(patch.data.size());
+        buffer.push_back((length >> 8) & 0xFF);
+        buffer.push_back(length & 0xFF);
+        
+        buffer.push_back((currentDataOffset >> 8) & 0xFF);
+        buffer.push_back(currentDataOffset & 0xFF);
+        
+        currentDataOffset += patch.data.size();
+    }
+    
+    buffer.push_back(0x00);
+    
+    for (const auto& patch : patches) {
+        buffer.insert(buffer.end(), patch.data.begin(), patch.data.end());
+    }
+    
+    // Encode
+    auto encoded = encode(buffer);
+    
+    // Prepare to capture MISO data
+    // We need a buffer at least as large as the encoded TX data
+    size_t totalLen = encoded.size();
+    std::vector<uint8_t> rxBuffer(totalLen);
+    misoData.clear();
+    
+    struct spi_ioc_transfer xfer;
+    std::memset(&xfer, 0, sizeof(xfer));
+    
+    xfer.tx_buf = reinterpret_cast<unsigned long>(encoded.data());
+    xfer.rx_buf = reinterpret_cast<unsigned long>(rxBuffer.data());
+    xfer.len = totalLen;
+    xfer.speed_hz = speed_;
+    xfer.bits_per_word = 8;
+    xfer.delay_usecs = 0;
+    
+    if (ioctl(fd_, SPI_IOC_MESSAGE(1), &xfer) < 0) {
+        setError("SPI transfer failed: " + std::string(std::strerror(errno)));
+        return false;
+    }
+    
+    // Return raw MISO data (before any decoding)
+    misoData = rxBuffer;
+    
+    return true;
+}
+
 bool SPIProtocol::clearPatches() {
     if (!isConnected()) {
         setError("SPI device not connected");

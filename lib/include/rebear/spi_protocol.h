@@ -89,6 +89,17 @@ public:
     bool uploadPatchBuffer(const std::vector<Patch>& patches);
     
     /**
+     * @brief Command 0x02: Upload patches with MISO data capture
+     * 
+     * Same as uploadPatchBuffer but also captures data received from FPGA (MISO).
+     * 
+     * @param patches Vector of patches to upload (max 8, variable data lengths)
+     * @param misoData Output vector to receive MISO data
+     * @return true if successful, false otherwise
+     */
+    bool uploadPatchBufferVerbose(const std::vector<Patch>& patches, std::vector<uint8_t>& misoData);
+    
+    /**
      * @brief Command 0x03: Clear all patches in FPGA
      * @return true if successful, false otherwise
      */

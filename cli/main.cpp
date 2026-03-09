@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstring>
 #include <memory>
+#include <type_traits>
 #include "rebear/spi_protocol.h"
 #include "rebear/spi_protocol_network.h"
 #include "rebear/patch_manager.h"
@@ -299,6 +300,9 @@ template<typename SPIType>
 int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* argv[]) {
     rebear::PatchManager patchMgr;
     
+    // Check if this is local SPI (for MISO capture)
+    constexpr bool isLocalSpi = std::is_same<SPIType, rebear::SPIProtocol>::value;
+    
     if (subcommand == "set") {
         // Parse arguments
         uint8_t id = 0;
@@ -400,7 +404,29 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
         }
         
         // Apply to FPGA
-        if (!patchMgr.applyAll(spi)) {
+        bool success = false;
+        
+        if (g_verbose && isLocalSpi) {
+            // Use verbose version to capture MISO data (only for local SPI)
+            std::vector<uint8_t> misoData;
+            std::vector<rebear::Patch> patchList = {patch};
+            
+            if constexpr (std::is_same<SPIType, rebear::SPIProtocol>::value) {
+                success = spi.uploadPatchBufferVerbose(patchList, misoData);
+                
+                if (success && !misoData.empty()) {
+                    std::cout << "\n=== FPGA Response (MISO) ===" << std::endl;
+                    printHexData("Received data", misoData);
+                }
+            }
+        } else {
+            success = patchMgr.applyAll(spi);
+            if (g_verbose && !isLocalSpi) {
+                std::cout << "\n[Note: MISO data capture not available in network mode]" << std::endl;
+            }
+        }
+        
+        if (!success) {
             std::cerr << "Error: Failed to apply patch: " << patchMgr.getLastError() << std::endl;
             spi.close();
             return 1;
