@@ -1,23 +1,24 @@
 #include "hex_viewer.h"
 #include <QPainter>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QWheelEvent>
-#include <QScrollBar>
 #include <QFileDialog>
 #include <QMessageBox>
-#include <QFormLayout>
-#include <QGroupBox>
+#include <QApplication>
+#include <QClipboard>
 #include <QFont>
 #include <QFontMetrics>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <algorithm>
 
 namespace rebear {
 namespace gui {
 
 // ============================================================================
-// HexDisplay Implementation
+// HexDisplay - Inline Editing Implementation
 // ============================================================================
 
 HexDisplay::HexDisplay(QWidget* parent)
@@ -28,11 +29,15 @@ HexDisplay::HexDisplay(QWidget* parent)
     , visibleRows_(0)
     , hoveredByte_(0xFFFFFFFF)
     , isHovering_(false)
+    , hasSelection_(false)
+    , selectionStart_(0)
+    , selectionEnd_(0)
+    , isEditing_(false)
+    , editAddress_(0xFFFFFFFF)
 {
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
     
-    // Use monospace font
     QFont font("Monospace", 10);
     font.setStyleHint(QFont::TypeWriter);
     setFont(font);
@@ -47,7 +52,6 @@ bool HexDisplay::loadFlashData(const std::string& filename) {
         return false;
     }
     
-    // Read entire file
     file.seekg(0, std::ios::end);
     size_t size = file.tellg();
     file.seekg(0, std::ios::beg);
@@ -56,6 +60,7 @@ bool HexDisplay::loadFlashData(const std::string& filename) {
     file.read(reinterpret_cast<char*>(flashData_.data()), size);
     
     scrollOffset_ = 0;
+    modifiedBytes_.clear();
     update();
     return true;
 }
@@ -76,7 +81,7 @@ void HexDisplay::highlightRange(uint32_t address, uint32_t count) {
     Highlight h;
     h.address = address;
     h.count = count;
-    h.color = QColor(255, 255, 0, 100);  // Yellow with transparency
+    h.color = QColor(255, 255, 0, 100);
     highlights_.push_back(h);
     update();
 }
@@ -90,25 +95,55 @@ void HexDisplay::refresh() {
     update();
 }
 
+void HexDisplay::setByteValue(uint32_t address, uint8_t value) {
+    if (address >= flashData_.size()) return;
+    
+    if (value == flashData_[address]) {
+        // Same as original, remove modification
+        modifiedBytes_.erase(address);
+    } else {
+        modifiedBytes_[address] = value;
+    }
+    
+    update();
+    emit modificationsChanged();
+}
+
+uint8_t HexDisplay::getByteValue(uint32_t address) const {
+    if (address >= flashData_.size()) return 0xFF;
+    
+    auto it = modifiedBytes_.find(address);
+    if (it != modifiedBytes_.end()) {
+        return it->second;
+    }
+    return flashData_[address];
+}
+
+void HexDisplay::clearModifications() {
+    modifiedBytes_.clear();
+    update();
+    emit modificationsChanged();
+}
+
+void HexDisplay::applyModificationsAsPatches() {
+    // This will be called by the parent widget
+    // Parent handles optimization and patch creation
+}
+
 void HexDisplay::calculateLayout() {
     QFontMetrics fm(font());
     charWidth_ = fm.horizontalAdvance('0');
     charHeight_ = fm.height();
     rowHeight_ = charHeight_ + 4;
     
-    // Address column: "00000000: "
     addressColumnWidth_ = charWidth_ * 10;
-    
-    // Hex column: "00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  "
     hexColumnWidth_ = charWidth_ * (bytesPerRow_ * 3 + 2);
-    
-    // ASCII column: "|0123456789ABCDEF|"
     asciiColumnWidth_ = charWidth_ * (bytesPerRow_ + 2);
     
     visibleRows_ = (height() - 20) / rowHeight_;
 }
 
-void HexDisplay::paintEvent(QPaintEvent* /* event */) {
+void HexDisplay::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.fillRect(rect(), Qt::white);
     
@@ -142,14 +177,16 @@ void HexDisplay::drawAddressColumn(QPainter& painter) {
 void HexDisplay::drawHexColumn(QPainter& painter) {
     int hexStartX = addressColumnWidth_ + 10;
     
-    // Get active patches
+    // Get active patches from patch manager
     std::map<uint32_t, rebear::Patch> patchMap;
     if (patchManager_) {
         auto patches = patchManager_->getPatches();
         for (const auto& patch : patches) {
-            if (patch.enabled) {
-                for (size_t i = 0; i < 8; ++i) {
-                    patchMap[patch.address + i] = patch;
+            if (patch.enabled && patch.address < flashData_.size()) {
+                size_t patchLen = std::min(patch.data.size(), 
+                                          size_t(flashData_.size() - patch.address));
+                for (size_t i = 0; i < patchLen; ++i) {
+                    patchMap[patch.address + static_cast<uint32_t>(i)] = patch;
                 }
             }
         }
@@ -168,8 +205,18 @@ void HexDisplay::drawHexColumn(QPainter& painter) {
             int x = hexStartX + col * charWidth_ * 3;
             QRect byteRect(x, y, charWidth_ * 2, charHeight_);
             
-            // Check if this byte is highlighted
-            // Check if this byte is highlighted
+            // Check if currently editing this byte
+            bool isEditingThis = (isEditing_ && address == editAddress_);
+            
+            // Check if in selection
+            bool isSelected = false;
+            if (hasSelection_) {
+                uint32_t selMin = std::min(selectionStart_, selectionEnd_);
+                uint32_t selMax = std::max(selectionStart_, selectionEnd_);
+                isSelected = (address >= selMin && address <= selMax);
+            }
+            
+            // Check highlights
             for (const auto& h : highlights_) {
                 if (address >= h.address && address < h.address + h.count) {
                     painter.fillRect(byteRect, h.color);
@@ -177,42 +224,62 @@ void HexDisplay::drawHexColumn(QPainter& painter) {
                 }
             }
             
-            // Check if this byte is patched
+            // Selection highlight (before other highlights)
+            if (isSelected && !isEditingThis) {
+                painter.fillRect(byteRect, QColor(173, 216, 230, 150));  // Light blue for selection
+            }
+            
+            // Check if modified by user
+            bool isModified = modifiedBytes_.find(address) != modifiedBytes_.end();
+            if (isModified) {
+                painter.fillRect(byteRect, QColor(255, 200, 100, 150));  // Orange for user modifications
+            }
+            
+            // Check if patched by patch manager
             bool isPatched = patchMap.find(address) != patchMap.end();
-            if (isPatched) {
-                painter.fillRect(byteRect, QColor(255, 200, 200));  // Light red for patches
+            if (isPatched && !isModified) {
+                painter.fillRect(byteRect, QColor(255, 200, 200, 150));  // Red for applied patches
             }
             
             // Check if hovered
-            if (isHovering_ && address == hoveredByte_) {
-                painter.fillRect(byteRect, QColor(200, 200, 255));  // Light blue for hover
+            if (isHovering_ && address == hoveredByte_ && !isEditingThis && !isSelected) {
+                painter.fillRect(byteRect, QColor(200, 200, 255, 150));  // Blue for hover
             }
             
-            // Draw byte value
-            uint8_t byte = flashData_[address];
-            if (isPatched) {
-                // Show patched value
-                auto it = patchMap.find(address);
-                const auto& patch = it->second;
-                size_t offset = address - patch.address;
-                byte = patch.data[offset];
+            // Editing highlight (highest priority)
+            if (isEditingThis) {
+                painter.fillRect(byteRect, QColor(100, 255, 100, 200));  // Bright green for editing
+            }
+            
+            // Get byte value (modified or original)
+            uint8_t byte = getByteValue(address);
+            
+            // Set color
+            if (isModified) {
+                painter.setPen(QColor(200, 100, 0));  // Orange text
+            } else if (isPatched) {
                 painter.setPen(Qt::red);
             } else {
                 painter.setPen(Qt::black);
             }
             
-            std::ostringstream oss;
-            oss << std::hex << std::setw(2) << std::setfill('0') 
-                << std::uppercase << static_cast<int>(byte);
-            
-            painter.drawText(x, y + charHeight_, QString::fromStdString(oss.str()));
+            // Draw value
+            if (isEditingThis && !editBuffer_.isEmpty()) {
+                // Show edit buffer
+                painter.setPen(Qt::darkGreen);
+                painter.drawText(x, y + charHeight_, editBuffer_.leftJustified(2, '_'));
+            } else {
+                std::ostringstream oss;
+                oss << std::hex << std::setw(2) << std::setfill('0') 
+                    << std::uppercase << static_cast<int>(byte);
+                painter.drawText(x, y + charHeight_, QString::fromStdString(oss.str()));
+            }
         }
     }
 }
 
 void HexDisplay::drawAsciiColumn(QPainter& painter) {
     int asciiStartX = addressColumnWidth_ + hexColumnWidth_ + 20;
-    
     painter.setPen(Qt::darkGray);
     
     for (uint32_t row = 0; row < visibleRows_; ++row) {
@@ -220,14 +287,13 @@ void HexDisplay::drawAsciiColumn(QPainter& painter) {
         if (rowAddress >= flashData_.size()) break;
         
         int y = 10 + row * rowHeight_;
-        
         painter.drawText(asciiStartX, y + charHeight_, "|");
         
         for (uint32_t col = 0; col < bytesPerRow_; ++col) {
             uint32_t address = rowAddress + col;
             if (address >= flashData_.size()) break;
             
-            uint8_t byte = flashData_[address];
+            uint8_t byte = getByteValue(address);
             char c = (byte >= 32 && byte < 127) ? byte : '.';
             
             int x = asciiStartX + charWidth_ + col * charWidth_;
@@ -243,13 +309,38 @@ void HexDisplay::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) {
         uint32_t address = getByteAtPosition(event->pos());
         if (address != 0xFFFFFFFF && address < flashData_.size()) {
-            showByteEditDialog(address);
+            if (event->modifiers() & Qt::ShiftModifier && hasSelection_) {
+                // Extend selection
+                selectionEnd_ = address;
+                update();
+            } else {
+                // Start new selection or edit
+                hasSelection_ = true;
+                selectionStart_ = address;
+                selectionEnd_ = address;
+                
+                // Start editing if single click
+                if (!(event->modifiers() & Qt::ControlModifier)) {
+                    startEditing(address);
+                }
+                update();
+            }
         }
     }
 }
 
 void HexDisplay::mouseMoveEvent(QMouseEvent* event) {
     uint32_t address = getByteAtPosition(event->pos());
+    
+    // Handle selection drag
+    if (event->buttons() & Qt::LeftButton && hasSelection_) {
+        if (address != 0xFFFFFFFF && address < flashData_.size()) {
+            selectionEnd_ = address;
+            update();
+        }
+    }
+    
+    // Handle hover
     if (address != hoveredByte_) {
         hoveredByte_ = address;
         isHovering_ = (address != 0xFFFFFFFF && address < flashData_.size());
@@ -267,8 +358,93 @@ void HexDisplay::wheelEvent(QWheelEvent* event) {
         newOffset = (flashData_.size() / bytesPerRow_) * bytesPerRow_;
     }
     
-    scrollOffset_ = newOffset;
+    scrollOffset_ = static_cast<uint32_t>(newOffset);
     update();
+}
+
+void HexDisplay::keyPressEvent(QKeyEvent* event) {
+    // Copy selection (Ctrl+C)
+    if (event->matches(QKeySequence::Copy) && hasSelection_) {
+        uint32_t selMin = std::min(selectionStart_, selectionEnd_);
+        uint32_t selMax = std::max(selectionStart_, selectionEnd_);
+        
+        QString hexStr;
+        for (uint32_t addr = selMin; addr <= selMax && addr < flashData_.size(); ++addr) {
+            if (!hexStr.isEmpty()) hexStr += " ";
+            hexStr += QString("%1").arg(getByteValue(addr), 2, 16, QChar('0')).toUpper();
+        }
+        
+        QApplication::clipboard()->setText(hexStr);
+        return;
+    }
+    
+    // Paste (Ctrl+V)
+    if (event->matches(QKeySequence::Paste) && hasSelection_) {
+        QString clipText = QApplication::clipboard()->text();
+        // Split on whitespace
+        QStringList bytes = clipText.split(' ', Qt::SkipEmptyParts);
+        
+        uint32_t addr = selectionStart_;
+        for (const QString& byteStr : bytes) {
+            if (addr >= flashData_.size()) break;
+            
+            bool ok;
+            uint8_t value = static_cast<uint8_t>(byteStr.toUInt(&ok, 16));
+            if (ok) {
+                setByteValue(addr, value);
+            }
+            addr++;
+        }
+        return;
+    }
+    
+    // Select all (Ctrl+A)
+    if (event->matches(QKeySequence::SelectAll)) {
+        hasSelection_ = true;
+        selectionStart_ = 0;
+        selectionEnd_ = static_cast<uint32_t>(flashData_.size() - 1);
+        update();
+        return;
+    }
+    
+    // Escape - clear selection
+    if (event->key() == Qt::Key_Escape) {
+        if (isEditing_) {
+            cancelEdit();
+        } else if (hasSelection_) {
+            hasSelection_ = false;
+            update();
+        }
+        return;
+    }
+    
+    // Editing keys
+    if (!isEditing_) {
+        QWidget::keyPressEvent(event);
+        return;
+    }
+    
+    QString key = event->text().toUpper();
+    
+    if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+        commitEdit();
+    } else if (event->key() == Qt::Key_Backspace) {
+        if (!editBuffer_.isEmpty()) {
+            editBuffer_.chop(1);
+            update();
+        }
+    } else if (key.length() == 1 && editBuffer_.length() < 2) {
+        QChar c = key[0];
+        if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
+            editBuffer_ += c;
+            if (editBuffer_.length() == 2) {
+                // Auto-commit after 2 hex digits
+                commitEdit();
+            } else {
+                update();
+            }
+        }
+    }
 }
 
 void HexDisplay::resizeEvent(QResizeEvent* event) {
@@ -279,18 +455,15 @@ void HexDisplay::resizeEvent(QResizeEvent* event) {
 uint32_t HexDisplay::getByteAtPosition(const QPoint& pos) const {
     int hexStartX = addressColumnWidth_ + 10;
     
-    // Check if in hex column
     if (pos.x() < hexStartX || pos.x() > hexStartX + hexColumnWidth_) {
         return 0xFFFFFFFF;
     }
     
-    // Calculate row
     int row = (pos.y() - 10) / rowHeight_;
     if (row < 0 || row >= static_cast<int>(visibleRows_)) {
         return 0xFFFFFFFF;
     }
     
-    // Calculate column
     int relX = pos.x() - hexStartX;
     int col = relX / (charWidth_ * 3);
     if (col < 0 || col >= static_cast<int>(bytesPerRow_)) {
@@ -317,63 +490,41 @@ QRect HexDisplay::getByteRect(uint32_t address) const {
     return QRect(x, y, charWidth_ * 2, charHeight_);
 }
 
-void HexDisplay::showByteEditDialog(uint32_t address) {
-    if (!patchManager_) {
-        QMessageBox::warning(this, "Error", "No patch manager available");
-        return;
+void HexDisplay::startEditing(uint32_t address) {
+    if (isEditing_) {
+        commitEdit();
     }
     
-    uint8_t originalValue = flashData_[address];
-    uint8_t currentValue = originalValue;
-    
-    // Check if already patched
-    auto patches = patchManager_->getPatches();
-    for (const auto& patch : patches) {
-        if (address >= patch.address && address < patch.address + 8) {
-            size_t offset = address - patch.address;
-            currentValue = patch.data[offset];
-            break;
-        }
-    }
-    
-    uint8_t patchId = getNextAvailablePatchId();
-    
-    ByteEditDialog dialog(address, currentValue, originalValue, patchId, this);
-    if (dialog.exec() == QDialog::Accepted) {
-        // Create patch
-        rebear::Patch patch;
-        patch.id = dialog.getPatchId();
-        patch.address = address;
-        patch.data = dialog.getPatchData();
-        patch.enabled = true;
-        
-        emit patchCreated(patch);
-        update();
-    }
+    isEditing_ = true;
+    editAddress_ = address;
+    editBuffer_.clear();
+    update();
 }
 
-uint8_t HexDisplay::getNextAvailablePatchId() const {
-    if (!patchManager_) {
-        return 0;
-    }
+void HexDisplay::commitEdit() {
+    if (!isEditing_) return;
     
-    std::set<uint8_t> usedIds;
-    auto patches = patchManager_->getPatches();
-    for (const auto& patch : patches) {
-        usedIds.insert(patch.id);
-    }
-    
-    for (uint8_t id = 0; id < 16; ++id) {
-        if (usedIds.find(id) == usedIds.end()) {
-            return id;
+    if (editBuffer_.length() == 2) {
+        bool ok;
+        uint8_t value = static_cast<uint8_t>(editBuffer_.toUInt(&ok, 16));
+        if (ok) {
+            setByteValue(editAddress_, value);
         }
     }
     
-    return 0;  // All IDs used, will need to replace
+    isEditing_ = false;
+    editBuffer_.clear();
+    update();
+}
+
+void HexDisplay::cancelEdit() {
+    isEditing_ = false;
+    editBuffer_.clear();
+    update();
 }
 
 // ============================================================================
-// HexViewer Implementation
+// HexViewer - Main Widget
 // ============================================================================
 
 HexViewer::HexViewer(QWidget* parent)
@@ -383,10 +534,9 @@ HexViewer::HexViewer(QWidget* parent)
 }
 
 void HexViewer::setupUi() {
-    // Create hex display
     hexDisplay_ = new HexDisplay(this);
     
-    // Create controls
+    // Controls
     editGotoAddress_ = new QLineEdit(this);
     editGotoAddress_->setPlaceholderText("Address (hex)");
     editGotoAddress_->setMaxLength(8);
@@ -408,37 +558,67 @@ void HexViewer::setupUi() {
     
     lblStatus_ = new QLabel("No flash data loaded", this);
     
-    // Layout controls
+    // Modification panel
+    txtModifications_ = new QTextEdit(this);
+    txtModifications_->setReadOnly(true);
+    txtModifications_->setMaximumHeight(150);
+    txtModifications_->setStyleSheet("QTextEdit { background-color: #f5f5f5; font-family: monospace; font-size: 9pt; }");
+    
+    lblModCount_ = new QLabel("No modifications", this);
+    lblModCount_->setStyleSheet("QLabel { font-weight: bold; }");
+    
+    btnApplyModifications_ = new QPushButton("Create Patches from Modifications", this);
+    btnApplyModifications_->setEnabled(false);
+    btnApplyModifications_->setToolTip("Generate patch ranges and add to Patches panel (does not send to device yet)");
+    connect(btnApplyModifications_, &QPushButton::clicked, this, &HexViewer::onApplyModifications);
+    
+    btnClearModifications_ = new QPushButton("Clear Modifications", this);
+    btnClearModifications_->setEnabled(false);
+    connect(btnClearModifications_, &QPushButton::clicked, this, &HexViewer::onClearModifications);
+    
+    btnGenerateCommand_ = new QPushButton("Copy CLI Command", this);
+    btnGenerateCommand_->setEnabled(false);
+    btnGenerateCommand_->setToolTip("Generate rebear-cli command and copy to clipboard");
+    connect(btnGenerateCommand_, &QPushButton::clicked, this, &HexViewer::onGenerateCommand);
+    
+    // Layout
     QHBoxLayout* controlLayout = new QHBoxLayout();
     controlLayout->addWidget(new QLabel("Address:", this));
     controlLayout->addWidget(editGotoAddress_);
     controlLayout->addWidget(btnGoto_);
     controlLayout->addSpacing(20);
-    controlLayout->addWidget(new QLabel("Search:", this));
-    controlLayout->addWidget(editSearch_);
-    controlLayout->addWidget(btnSearch_);
-    controlLayout->addSpacing(20);
     controlLayout->addWidget(btnClearHighlights_);
     controlLayout->addStretch();
     controlLayout->addWidget(btnLoadFlash_);
     
-    // Main layout
+    QVBoxLayout* modPanel = new QVBoxLayout();
+    modPanel->addWidget(lblModCount_);
+    modPanel->addWidget(txtModifications_);
+    QHBoxLayout* modButtons = new QHBoxLayout();
+    modButtons->addWidget(btnApplyModifications_);
+    modButtons->addWidget(btnClearModifications_);
+    modButtons->addWidget(btnGenerateCommand_);
+    modButtons->addStretch();
+    modPanel->addLayout(modButtons);
+    
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
     mainLayout->addLayout(controlLayout);
     mainLayout->addWidget(hexDisplay_, 1);
+    mainLayout->addWidget(new QLabel("Modifications (click bytes to edit, type hex values):", this));
+    mainLayout->addLayout(modPanel);
     mainLayout->addWidget(lblStatus_);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     
     setLayout(mainLayout);
     
-    // Connect signals
+    connect(hexDisplay_, &HexDisplay::modificationsChanged, this, &HexViewer::onModificationsChanged);
     connect(hexDisplay_, &HexDisplay::patchCreated, this, &HexViewer::patchCreated);
-    connect(hexDisplay_, &HexDisplay::applyPatchesRequested, this, &HexViewer::applyPatchesRequested);
 }
 
 bool HexViewer::loadFlashData(const std::string& filename) {
     if (hexDisplay_->loadFlashData(filename)) {
         lblStatus_->setText(QString("Loaded: %1").arg(QString::fromStdString(filename)));
+        onModificationsChanged();
         return true;
     }
     lblStatus_->setText("Failed to load flash data");
@@ -481,7 +661,6 @@ void HexViewer::onGotoClicked() {
 }
 
 void HexViewer::onSearchClicked() {
-    // TODO: Implement search functionality
     QMessageBox::information(this, "Search", "Search functionality not yet implemented");
 }
 
@@ -498,149 +677,200 @@ void HexViewer::onLoadFlashClicked() {
     }
 }
 
-// ============================================================================
-// ByteEditDialog Implementation
-// ============================================================================
-
-ByteEditDialog::ByteEditDialog(uint32_t address, uint8_t currentValue,
-                               uint8_t originalValue, uint8_t patchId,
-                               QWidget* parent)
-    : QDialog(parent)
-    , address_(address)
-    , originalValue_(originalValue)
-    , patchId_(patchId)
-{
-    setupUi();
-    
-    // Set initial value
-    std::ostringstream oss;
-    oss << std::hex << std::setw(2) << std::setfill('0') 
-        << std::uppercase << static_cast<int>(currentValue);
-    editByte0_->setText(QString::fromStdString(oss.str()));
+void HexViewer::onModificationsChanged() {
+    updateModificationPanel();
 }
 
-void ByteEditDialog::setupUi() {
-    setWindowTitle("Edit Byte / Create Patch");
-    setModal(true);
+void HexViewer::updateModificationPanel() {
+    auto mods = hexDisplay_->getModifiedBytes();
     
-    // Address info
+    if (mods.empty()) {
+        lblModCount_->setText("No modifications");
+        lblModCount_->setStyleSheet("QLabel { font-weight: bold; color: gray; }");
+        txtModifications_->setText("Click on any byte in the hex view to start editing.\nType 2 hex digits to change the value.");
+        btnApplyModifications_->setEnabled(false);
+        btnClearModifications_->setEnabled(false);
+        btnGenerateCommand_->setEnabled(false);
+        return;
+    }
+    
+    // Calculate optimized patches
+    auto patches = calculateOptimizedPatches();
+    
+    // Check if too many patches
+    bool tooManyPatches = patches.size() > 8;
+    
+    if (tooManyPatches) {
+        lblModCount_->setText(QString("⚠ WARNING: %1 byte(s) modified → %2 patches (MAX 8!)")
+                             .arg(mods.size())
+                             .arg(patches.size()));
+        lblModCount_->setStyleSheet("QLabel { font-weight: bold; color: red; }");
+    } else {
+        lblModCount_->setText(QString("✓ %1 byte(s) modified → %2 optimized patch(es)")
+                             .arg(mods.size())
+                             .arg(patches.size()));
+        lblModCount_->setStyleSheet("QLabel { font-weight: bold; color: green; }");
+    }
+    
+    // Show patch details
     std::ostringstream oss;
-    oss << "0x" << std::hex << std::setw(8) << std::setfill('0') 
-        << std::uppercase << address_;
-    lblAddress_ = new QLabel(QString::fromStdString(oss.str()), this);
     
-    oss.str("");
-    oss << "0x" << std::hex << std::setw(2) << std::setfill('0') 
-        << std::uppercase << static_cast<int>(originalValue_);
-    lblOriginal_ = new QLabel(QString::fromStdString(oss.str()), this);
-    
-    // Patch ID
-    spinPatchId_ = new QSpinBox(this);
-    spinPatchId_->setRange(0, 15);
-    spinPatchId_->setValue(patchId_);
-    
-    // Byte editors (8 bytes for patch)
-    editByte0_ = new QLineEdit(this);
-    editByte1_ = new QLineEdit(this);
-    editByte2_ = new QLineEdit(this);
-    editByte3_ = new QLineEdit(this);
-    editByte4_ = new QLineEdit(this);
-    editByte5_ = new QLineEdit(this);
-    editByte6_ = new QLineEdit(this);
-    editByte7_ = new QLineEdit(this);
-    
-    byteEdits_ = {editByte0_, editByte1_, editByte2_, editByte3_,
-                  editByte4_, editByte5_, editByte6_, editByte7_};
-    
-    for (auto* edit : byteEdits_) {
-        edit->setMaxLength(2);
-        edit->setFixedWidth(40);
-        connect(edit, &QLineEdit::textChanged, this, &ByteEditDialog::onByteValueChanged);
+    if (tooManyPatches) {
+        oss << "⚠ ERROR: Too many patch ranges (" << patches.size() << " > 8)\n";
+        oss << "The FPGA hardware only supports 8 patches maximum per buffer.\n";
+        oss << "Please reduce your modifications or group them closer together.\n\n";
     }
     
-    // Preview
-    txtPreview_ = new QTextEdit(this);
-    txtPreview_->setReadOnly(true);
-    txtPreview_->setMaximumHeight(100);
+    oss << "Optimized Patch Ranges:\n\n";
     
-    // Buttons
-    btnApply_ = new QPushButton("Apply Patch", this);
-    btnCancel_ = new QPushButton("Cancel", this);
-    connect(btnApply_, &QPushButton::clicked, this, &ByteEditDialog::onApplyClicked);
-    connect(btnCancel_, &QPushButton::clicked, this, &QDialog::reject);
-    
-    // Layout
-    QFormLayout* formLayout = new QFormLayout();
-    formLayout->addRow("Address:", lblAddress_);
-    formLayout->addRow("Original Value:", lblOriginal_);
-    formLayout->addRow("Patch ID (0-15):", spinPatchId_);
-    
-    QHBoxLayout* byteLayout = new QHBoxLayout();
-    byteLayout->addWidget(new QLabel("Patch Data (8 bytes):", this));
-    for (auto* edit : byteEdits_) {
-        byteLayout->addWidget(edit);
+    for (size_t i = 0; i < patches.size(); ++i) {
+        oss << "Patch " << (i+1) << ": 0x" << std::hex << std::setw(8) 
+            << std::setfill('0') << std::uppercase << patches[i].address 
+            << " (" << std::dec << patches[i].data.size() << " bytes)\n";
+        
+        oss << "  Data: ";
+        size_t showBytes = std::min(patches[i].data.size(), size_t(16));
+        for (size_t j = 0; j < showBytes; ++j) {
+            oss << std::hex << std::setw(2) << std::setfill('0') 
+                << std::uppercase << static_cast<int>(patches[i].data[j]) << " ";
+        }
+        if (patches[i].data.size() > 16) {
+            oss << "... (+" << std::dec << (patches[i].data.size() - 16) << " more)";
+        }
+        oss << "\n\n";
     }
-    byteLayout->addStretch();
-    formLayout->addRow(byteLayout);
     
-    formLayout->addRow("Preview:", txtPreview_);
-    
-    QHBoxLayout* buttonLayout = new QHBoxLayout();
-    buttonLayout->addStretch();
-    buttonLayout->addWidget(btnApply_);
-    buttonLayout->addWidget(btnCancel_);
-    
-    QVBoxLayout* mainLayout = new QVBoxLayout(this);
-    mainLayout->addLayout(formLayout);
-    mainLayout->addLayout(buttonLayout);
-    
-    setLayout(mainLayout);
-    
-    onByteValueChanged();
+    txtModifications_->setText(QString::fromStdString(oss.str()));
+    btnApplyModifications_->setEnabled(!tooManyPatches);
+    btnClearModifications_->setEnabled(true);
+    btnGenerateCommand_->setEnabled(true);
 }
 
-std::array<uint8_t, 8> ByteEditDialog::getPatchData() const {
-    std::array<uint8_t, 8> data;
-    for (size_t i = 0; i < 8; ++i) {
-        bool ok;
-        data[i] = byteEdits_[i]->text().toUInt(&ok, 16);
-        if (!ok) data[i] = 0;
+std::vector<rebear::Patch> HexViewer::calculateOptimizedPatches() const {
+    auto mods = hexDisplay_->getModifiedBytes();
+    if (mods.empty()) {
+        return {};
     }
-    return data;
-}
-
-void ByteEditDialog::onByteValueChanged() {
-    // Update preview
-    QString preview = "Patch will replace 8 bytes starting at address:\n";
     
-    std::ostringstream oss;
-    oss << "0x" << std::hex << std::setw(8) << std::setfill('0') 
-        << std::uppercase << address_ << ": ";
+    std::vector<rebear::Patch> patches;
+    std::vector<uint32_t> sortedAddrs;
     
-    for (size_t i = 0; i < 8; ++i) {
-        QString text = byteEdits_[i]->text().toUpper();
-        if (text.length() == 2) {
-            oss << text.toStdString() << " ";
+    for (const auto& pair : mods) {
+        sortedAddrs.push_back(pair.first);
+    }
+    std::sort(sortedAddrs.begin(), sortedAddrs.end());
+    
+    // Group into patches (split on gaps > 8 bytes, max 256 bytes/patch)
+    const uint32_t MAX_GAP = 8;
+    const size_t MAX_PATCH_SIZE = 256;
+    
+    uint32_t patchStart = sortedAddrs[0];
+    uint32_t patchEnd = sortedAddrs[0] + 1;
+    
+    uint8_t nextId = 0;
+    
+    auto emitPatch = [&]() {
+        rebear::Patch patch;
+        patch.address = patchStart;
+        patch.enabled = true;
+        patch.id = nextId++;  // Assign unique ID
+        
+        for (uint32_t addr = patchStart; addr < patchEnd; ++addr) {
+            patch.data.push_back(hexDisplay_->getByteValue(addr));
+        }
+        
+        patches.push_back(patch);
+    };
+    
+    for (size_t i = 1; i < sortedAddrs.size(); ++i) {
+        uint32_t addr = sortedAddrs[i];
+        uint32_t gap = addr - patchEnd;
+        uint32_t newSize = addr - patchStart + 1;
+        
+        if (gap <= MAX_GAP && newSize <= MAX_PATCH_SIZE) {
+            patchEnd = addr + 1;
         } else {
-            oss << "?? ";
+            emitPatch();
+            patchStart = addr;
+            patchEnd = addr + 1;
         }
     }
     
-    preview += QString::fromStdString(oss.str());
-    txtPreview_->setText(preview);
+    emitPatch();
+    return patches;
 }
 
-void ByteEditDialog::onApplyClicked() {
-    // Validate all bytes
-    for (size_t i = 0; i < 8; ++i) {
-        if (byteEdits_[i]->text().length() != 2) {
-            QMessageBox::warning(this, "Invalid Data", 
-                QString("Byte %1 must be exactly 2 hex characters").arg(i));
-            return;
+void HexViewer::onApplyModifications() {
+    auto patches = calculateOptimizedPatches();
+    if (patches.empty()) return;
+    
+    if (patches.size() > 8) {
+        QMessageBox::critical(this, "Too Many Patches", 
+            QString("Cannot apply: %1 patches would be created, but FPGA only supports 8 maximum per buffer.\n\n"
+                   "Please reduce your modifications or group them closer together.")
+                   .arg(patches.size()));
+        return;
+    }
+    
+    // Emit the patches - the main window will handle applying to device
+    for (const auto& patch : patches) {
+        emit patchCreated(patch);
+    }
+    
+    // DON'T clear modifications - keep them visible in hex view
+    // They'll still show as orange (modified) vs red (applied patches)
+    // User can manually clear with "Clear Modifications" button
+    
+    QMessageBox::information(this, "Patches Created", 
+        QString("Created %1 patch(es) from your modifications.\n\n"
+               "The modifications are still visible (orange) in the hex view.\n"
+               "Applied patches will show in red once sent to device.\n\n"
+               "Use 'Apply All' in the Patches panel to send to device.")
+               .arg(patches.size()));
+}
+
+void HexViewer::onClearModifications() {
+    auto reply = QMessageBox::question(this, "Clear Modifications", 
+                                       "Discard all modifications?");
+    if (reply == QMessageBox::Yes) {
+        hexDisplay_->clearModifications();
+    }
+}
+
+void HexViewer::onGenerateCommand() {
+    auto patches = calculateOptimizedPatches();
+    if (patches.empty()) {
+        return;
+    }
+    
+    // Build single rebear-cli command with all patches
+    QString command = "rebear-cli patch set";
+    
+    for (const auto& patch : patches) {
+        command += QString(" --address 0x%1 --data ")
+                   .arg(patch.address, 6, 16, QChar('0')).toUpper();
+        
+        // Add hex data
+        for (size_t i = 0; i < patch.data.size(); ++i) {
+            command += QString("%1").arg(patch.data[i], 2, 16, QChar('0')).toUpper();
         }
     }
     
-    accept();
+    // Copy to clipboard
+    QApplication::clipboard()->setText(command);
+    
+    // Show confirmation with preview
+    QString preview = command;
+    if (preview.length() > 300) {
+        preview = preview.left(300) + "...";
+    }
+    
+    QMessageBox::information(this, "Command Copied", 
+        QString("rebear-cli command copied to clipboard!\n\n"
+               "Preview:\n%1\n\n"
+               "Patches: %2 (sent in one buffer)")
+               .arg(preview)
+               .arg(patches.size()));
 }
 
 } // namespace gui

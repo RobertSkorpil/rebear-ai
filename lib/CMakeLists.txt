@@ -1,18 +1,24 @@
 # rebear core library
 
-# Source files
+# Platform-independent source files
 set(REBEAR_SOURCES
     src/escape_codec.cpp
     src/transaction.cpp
     src/patch.cpp
-    src/spi_protocol.cpp
     src/patch_manager.cpp
-    src/gpio_control.cpp
     src/protocol.cpp
     src/network_client.cpp
     src/spi_protocol_network.cpp
     src/gpio_control_network.cpp
 )
+
+# Linux-specific hardware interface files
+if(UNIX AND NOT APPLE)
+    list(APPEND REBEAR_SOURCES
+        src/spi_protocol.cpp
+        src/gpio_control.cpp
+    )
+endif()
 
 # Header files
 set(REBEAR_HEADERS
@@ -28,8 +34,12 @@ set(REBEAR_HEADERS
     include/rebear/gpio_control_network.h
 )
 
-# Create shared library
-add_library(rebear SHARED ${REBEAR_SOURCES})
+# Create library (shared on Linux, static on Windows for simplicity)
+if(WIN32)
+    add_library(rebear STATIC ${REBEAR_SOURCES})
+else()
+    add_library(rebear SHARED ${REBEAR_SOURCES})
+endif()
 
 # Set library properties
 set_target_properties(rebear PROPERTIES
@@ -52,6 +62,14 @@ target_link_libraries(rebear
     PUBLIC
         Threads::Threads
 )
+
+# Windows-specific libraries
+if(WIN32)
+    target_link_libraries(rebear
+        PUBLIC
+            ws2_32
+    )
+endif()
 
 # Installation
 install(TARGETS rebear

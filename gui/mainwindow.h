@@ -14,11 +14,13 @@ class QSplitter;
 class QTextEdit;
 
 namespace rebear {
+#if defined(__linux__) && !defined(__APPLE__)
     class SPIProtocol;
-    class SPIProtocolNetwork;
-    class PatchManager;
     class ButtonControl;
     class BufferReadyMonitor;
+#endif
+    class SPIProtocolNetwork;
+    class PatchManager;
     class GPIOControlNetwork;
     class ConnectionDialog;
     struct Transaction;
@@ -164,11 +166,13 @@ private:
     rebear::gui::PatchEditor* patchEditor_;
     rebear::gui::HexViewer* hexViewer_;
     
-    // Core library objects (local mode)
+    // Core library objects (local mode - Linux only)
+#if defined(__linux__) && !defined(__APPLE__)
     std::unique_ptr<rebear::SPIProtocol> spi_;
-    std::unique_ptr<rebear::PatchManager> patchManager_;
     std::unique_ptr<rebear::ButtonControl> buttonControl_;
     std::unique_ptr<rebear::BufferReadyMonitor> bufferMonitor_;
+#endif
+    std::unique_ptr<rebear::PatchManager> patchManager_;
     
     // Network objects (network mode)
     std::unique_ptr<rebear::SPIProtocolNetwork> spiNetwork_;

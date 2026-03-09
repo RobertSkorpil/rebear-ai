@@ -3,10 +3,12 @@
 #include "widgets/patch_editor.h"
 #include "widgets/hex_viewer.h"
 #include "widgets/connection_dialog.h"
+#if defined(__linux__) && !defined(__APPLE__)
 #include "rebear/spi_protocol.h"
+#include "rebear/gpio_control.h"
+#endif
 #include "rebear/spi_protocol_network.h"
 #include "rebear/patch_manager.h"
-#include "rebear/gpio_control.h"
 #include "rebear/gpio_control_network.h"
 #include "rebear/transaction.h"
 
@@ -78,7 +80,9 @@ MainWindow::~MainWindow()
         if (useNetwork_) {
             if (spiNetwork_) spiNetwork_->close();
         } else {
+#if defined(__linux__) && !defined(__APPLE__)
             if (spi_) spi_->close();
+#endif
         }
     }
 }
@@ -296,7 +300,9 @@ void MainWindow::createCentralWidget()
                 if (useNetwork_) {
                     success = patchManager_->applyAll(*spiNetwork_);
                 } else {
+#if defined(__linux__) && !defined(__APPLE__)
                     success = patchManager_->applyAll(*spi_);
+#endif
                 }
                 if (success) {
                     updateStatusBar("All patches applied");
@@ -428,7 +434,8 @@ void MainWindow::onConnect()
         }
         
     } else {
-        // Local mode
+#if defined(__linux__) && !defined(__APPLE__)
+        // Local mode - Linux only
         logMessage(QString("Connecting to local hardware %1 at %2 Hz...")
                   .arg(currentDevice_).arg(currentSpeed_));
         
@@ -462,6 +469,13 @@ void MainWindow::onConnect()
             logMessage(QString("Warning: Buffer monitor failed: %1")
                       .arg(QString::fromStdString(bufferMonitor_->getLastError())));
         }
+#else
+        // Local mode not supported on non-Linux platforms
+        QMessageBox::critical(this, "Connection Error",
+            "Local hardware mode is only supported on Linux.\nPlease use network mode to connect to a remote server.");
+        logMessage("Error: Local mode not supported on this platform. Use network mode.");
+        return;
+#endif
     }
     
     // Save settings if requested
@@ -498,6 +512,7 @@ void MainWindow::onDisconnect()
         }
         logMessage("Disconnected from remote server");
     } else {
+#if defined(__linux__) && !defined(__APPLE__)
         if (spi_) {
             spi_->close();
             spi_.reset();
@@ -506,6 +521,7 @@ void MainWindow::onDisconnect()
         buttonControl_.reset();
         bufferMonitor_.reset();
         logMessage("Disconnected from FPGA");
+#endif
     }
     
     updateConnectionState(false);
@@ -525,8 +541,10 @@ void MainWindow::onClearTransactions()
         success = spiNetwork_->clearTransactions();
         error = spiNetwork_->getLastError();
     } else {
+#if defined(__linux__) && !defined(__APPLE__)
         success = spi_->clearTransactions();
         error = spi_->getLastError();
+#endif
     }
     
     if (success) {
@@ -555,9 +573,11 @@ void MainWindow::onPollTransactions()
             ready = bufferMonitorNetwork_->readInput();
         }
     } else {
+#if defined(__linux__) && !defined(__APPLE__)
         if (bufferMonitor_) {
             ready = bufferMonitor_->isReady();
         }
+#endif
     }
     
     if (!ready) {
@@ -572,7 +592,9 @@ void MainWindow::onPollTransactions()
         if (useNetwork_) {
             trans = spiNetwork_->readTransaction();
         } else {
+#if defined(__linux__) && !defined(__APPLE__)
             trans = spi_->readTransaction();
+#endif
         }
         
         if (trans && trans->address != 0xFFFFFF) {
@@ -609,7 +631,16 @@ void MainWindow::onLoadPatches()
             patchEditor_->refresh();
             
             // Apply all patches to FPGA
-            if (patchManager_->applyAll(*spi_)) {
+            bool applied = false;
+            if (useNetwork_) {
+                applied = patchManager_->applyAll(*spiNetwork_);
+            } else {
+#if defined(__linux__) && !defined(__APPLE__)
+                applied = patchManager_->applyAll(*spi_);
+#endif
+            }
+            
+            if (applied) {
                 updateStatusBar(QString("Loaded %1 patches").arg(patchManager_->count()));
                 logMessage(QString("Loaded and applied %1 patches from %2")
                           .arg(patchManager_->count())
@@ -658,7 +689,16 @@ void MainWindow::onClearPatches()
                                                              QMessageBox::Yes | QMessageBox::No);
     
     if (reply == QMessageBox::Yes) {
-        if (patchManager_->clearAll(*spi_)) {
+        bool cleared = false;
+        if (useNetwork_) {
+            cleared = patchManager_->clearAll(*spiNetwork_);
+        } else {
+#if defined(__linux__) && !defined(__APPLE__)
+            cleared = patchManager_->clearAll(*spi_);
+#endif
+        }
+        
+        if (cleared) {
             updateStatusBar("All patches cleared");
             logMessage("All patches cleared from FPGA");
         } else {
@@ -682,10 +722,12 @@ void MainWindow::onButtonPress()
             error = buttonNetwork_->getLastError();
         }
     } else {
+#if defined(__linux__) && !defined(__APPLE__)
         if (buttonControl_) {
             success = buttonControl_->press();
             error = buttonControl_->getLastError();
         }
+#endif
     }
     
     if (success) {
@@ -712,10 +754,12 @@ void MainWindow::onButtonRelease()
             error = buttonNetwork_->getLastError();
         }
     } else {
+#if defined(__linux__) && !defined(__APPLE__)
         if (buttonControl_) {
             success = buttonControl_->release();
             error = buttonControl_->getLastError();
         }
+#endif
     }
     
     if (success) {
@@ -747,10 +791,12 @@ void MainWindow::onButtonClick()
             error = buttonNetwork_->getLastError();
         }
     } else {
+#if defined(__linux__) && !defined(__APPLE__)
         if (buttonControl_) {
             success = buttonControl_->click(100);
             error = buttonControl_->getLastError();
         }
+#endif
     }
     
     if (success) {

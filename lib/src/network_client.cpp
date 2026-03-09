@@ -1,18 +1,74 @@
 #include "rebear/network_client.h"
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
 #include <cstring>
 #include <chrono>
+
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
+    
+    using ssize_t = SSIZE_T;
+    using socklen_t = int;
+    #define close closesocket
+    #define SHUT_RDWR SD_BOTH
+    #ifndef EINPROGRESS
+        #define EINPROGRESS WSAEWOULDBLOCK
+    #endif
+    #ifndef EINTR
+        #define EINTR WSAEINTR
+    #endif
+    
+    static int get_last_error() {
+        return WSAGetLastError();
+    }
+    
+    static std::string get_error_string(int error) {
+        char* msg = nullptr;
+        FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                      nullptr, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&msg, 0, nullptr);
+        std::string result = msg ? msg : "Unknown error";
+        LocalFree(msg);
+        return result;
+    }
+    
+    class WinsockInit {
+    public:
+        WinsockInit() {
+            WSADATA wsaData;
+            WSAStartup(MAKEWORD(2, 2), &wsaData);
+        }
+        ~WinsockInit() {
+            WSACleanup();
+        }
+    };
+    static WinsockInit winsock_init;
+#else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <netdb.h>
+    #include <unistd.h>
+    #include <fcntl.h>
+    #include <poll.h>
+    #include <errno.h>
+    
+    static int get_last_error() {
+        return errno;
+    }
+    
+    static std::string get_error_string(int error) {
+        return std::strerror(error);
+    }
+#endif
 
 namespace rebear {
 
 NetworkClient::NetworkClient(const std::string& host, uint16_t port)
+#ifdef _WIN32
+    : socket_fd_(INVALID_SOCKET)
+#else
     : socket_fd_(-1)
+#endif
     , host_(host)
     , port_(port)
     , connected_(false)
@@ -33,68 +89,114 @@ bool NetworkClient::connect(int timeout_ms) {
     
     // Create socket
     socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+#ifdef _WIN32
+    if (socket_fd_ == INVALID_SOCKET) {
+#else
     if (socket_fd_ < 0) {
-        setError("Failed to create socket");
+#endif
+        setError("Failed to create socket: " + get_error_string(get_last_error()));
         return false;
     }
     
     // Set non-blocking for connect timeout
+#ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(socket_fd_, FIONBIO, &mode);
+#else
     int flags = fcntl(socket_fd_, F_GETFL, 0);
     fcntl(socket_fd_, F_SETFL, flags | O_NONBLOCK);
+#endif
     
     // Resolve hostname
-    struct hostent* server = gethostbyname(host_.c_str());
-    if (server == nullptr) {
+    struct addrinfo hints, *result_addrinfo = nullptr;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    
+    if (getaddrinfo(host_.c_str(), std::to_string(port_).c_str(), &hints, &result_addrinfo) != 0) {
         setError("Failed to resolve hostname: " + host_);
         close(socket_fd_);
+#ifdef _WIN32
+        socket_fd_ = INVALID_SOCKET;
+#else
         socket_fd_ = -1;
+#endif
         return false;
     }
     
-    // Setup server address
-    struct sockaddr_in serv_addr;
-    memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
-    serv_addr.sin_port = htons(port_);
-    
     // Attempt connection
-    int result = ::connect(socket_fd_, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+    int connect_result = ::connect(socket_fd_, result_addrinfo->ai_addr, (socklen_t)result_addrinfo->ai_addrlen);
+    freeaddrinfo(result_addrinfo);
     
-    if (result < 0) {
-        if (errno != EINPROGRESS) {
-            setError("Connection failed: " + std::string(strerror(errno)));
+    if (connect_result < 0) {
+        int error = get_last_error();
+#ifdef _WIN32
+        if (error != WSAEWOULDBLOCK) {
+#else
+        if (error != EINPROGRESS) {
+#endif
+            setError("Connection failed: " + get_error_string(error));
             close(socket_fd_);
+#ifdef _WIN32
+            socket_fd_ = INVALID_SOCKET;
+#else
             socket_fd_ = -1;
+#endif
             return false;
         }
         
         // Wait for connection with timeout
+#ifdef _WIN32
+        fd_set write_fds;
+        FD_ZERO(&write_fds);
+        FD_SET(socket_fd_, &write_fds);
+        
+        struct timeval tv;
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        
+        int select_result = select(0, nullptr, &write_fds, nullptr, &tv);
+        if (select_result <= 0) {
+#else
         struct pollfd pfd;
         pfd.fd = socket_fd_;
         pfd.events = POLLOUT;
         
-        result = poll(&pfd, 1, timeout_ms);
-        if (result <= 0) {
-            setError(result == 0 ? "Connection timeout" : "Connection failed");
+        int select_result = poll(&pfd, 1, timeout_ms);
+        if (select_result <= 0) {
+#endif
+            setError(select_result == 0 ? "Connection timeout" : "Connection failed");
             close(socket_fd_);
+#ifdef _WIN32
+            socket_fd_ = INVALID_SOCKET;
+#else
             socket_fd_ = -1;
+#endif
             return false;
         }
         
         // Check if connection succeeded
-        int error = 0;
-        socklen_t len = sizeof(error);
-        if (getsockopt(socket_fd_, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
-            setError("Connection failed: " + std::string(strerror(error)));
+        int sock_error = 0;
+        socklen_t len = sizeof(sock_error);
+        if (getsockopt(socket_fd_, SOL_SOCKET, SO_ERROR, (char*)&sock_error, &len) < 0 || sock_error != 0) {
+            setError("Connection failed: " + get_error_string(sock_error));
             close(socket_fd_);
+#ifdef _WIN32
+            socket_fd_ = INVALID_SOCKET;
+#else
             socket_fd_ = -1;
+#endif
             return false;
         }
     }
     
     // Set back to blocking mode
+#ifdef _WIN32
+    u_long mode_blocking = 0;
+    ioctlsocket(socket_fd_, FIONBIO, &mode_blocking);
+#else
     fcntl(socket_fd_, F_SETFL, flags);
+#endif
     
     // Start receive thread
     connected_ = true;
@@ -119,10 +221,17 @@ void NetworkClient::disconnect() {
     response_cv_.notify_all();
     
     // Close socket
+#ifdef _WIN32
+    if (socket_fd_ != INVALID_SOCKET) {
+        close(socket_fd_);
+        socket_fd_ = INVALID_SOCKET;
+    }
+#else
     if (socket_fd_ >= 0) {
         close(socket_fd_);
         socket_fd_ = -1;
     }
+#endif
     
     // Wait for receive thread
     if (recv_thread_.joinable()) {
@@ -185,19 +294,24 @@ bool NetworkClient::sendMessage(const protocol::Message& msg) {
     
     std::lock_guard<std::mutex> lock(mutex_);
     
+#ifdef _WIN32
+    if (socket_fd_ == INVALID_SOCKET) {
+#else
     if (socket_fd_ < 0) {
+#endif
         setError("Socket not open");
         return false;
     }
     
     size_t sent = 0;
     while (sent < data.size()) {
-        ssize_t result = send(socket_fd_, data.data() + sent, data.size() - sent, 0);
+        ssize_t result = send(socket_fd_, (const char*)(data.data() + sent), (int)(data.size() - sent), 0);
         if (result < 0) {
-            if (errno == EINTR) {
+            int error = get_last_error();
+            if (error == EINTR) {
                 continue;
             }
-            setError("Send failed: " + std::string(strerror(errno)));
+            setError("Send failed: " + get_error_string(error));
             connected_ = false;
             return false;
         }
@@ -209,6 +323,27 @@ bool NetworkClient::sendMessage(const protocol::Message& msg) {
 
 bool NetworkClient::receiveMessage(protocol::Message& msg, int timeout_ms) {
     // Wait for data with timeout
+#ifdef _WIN32
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    FD_SET(socket_fd_, &read_fds);
+    
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    
+    int result = select(0, &read_fds, nullptr, nullptr, &tv);
+    if (result <= 0) {
+        if (result < 0) {
+            int error = get_last_error();
+            if (error != EINTR) {
+                setError("Select failed: " + get_error_string(error));
+                connected_ = false;
+            }
+        }
+        return false;
+    }
+#else
     struct pollfd pfd;
     pfd.fd = socket_fd_;
     pfd.events = POLLIN;
@@ -221,16 +356,18 @@ bool NetworkClient::receiveMessage(protocol::Message& msg, int timeout_ms) {
         }
         return false;
     }
+#endif
     
     // Read header first
     std::vector<uint8_t> header(protocol::MIN_MESSAGE_SIZE);
     size_t received = 0;
     
     while (received < protocol::MIN_MESSAGE_SIZE) {
-        ssize_t result = recv(socket_fd_, header.data() + received, 
-                             protocol::MIN_MESSAGE_SIZE - received, 0);
+        ssize_t result = recv(socket_fd_, (char*)(header.data() + received), 
+                             (int)(protocol::MIN_MESSAGE_SIZE - received), 0);
         if (result <= 0) {
-            if (result == 0 || errno != EINTR) {
+            int error = get_last_error();
+            if (result == 0 || error != EINTR) {
                 setError("Connection closed");
                 connected_ = false;
                 return false;
@@ -263,10 +400,11 @@ bool NetworkClient::receiveMessage(protocol::Message& msg, int timeout_ms) {
         received = 0;
         
         while (received < remaining) {
-            ssize_t result = recv(socket_fd_, full_message.data() + protocol::MIN_MESSAGE_SIZE + received,
-                                 remaining - received, 0);
+            ssize_t result = recv(socket_fd_, (char*)(full_message.data() + protocol::MIN_MESSAGE_SIZE + received),
+                                 (int)(remaining - received), 0);
             if (result <= 0) {
-                if (result == 0 || errno != EINTR) {
+                int error = get_last_error();
+                if (result == 0 || error != EINTR) {
                     setError("Connection closed");
                     connected_ = false;
                     return false;

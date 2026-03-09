@@ -10,6 +10,13 @@
 #include <condition_variable>
 #include <map>
 
+#ifdef _WIN32
+    #include <winsock2.h>
+    using socket_t = SOCKET;
+#else
+    using socket_t = int;
+#endif
+
 namespace rebear {
 
 /**
@@ -75,7 +82,7 @@ public:
 
 private:
     // Connection state
-    int socket_fd_;
+    socket_t socket_fd_;
     std::string host_;
     uint16_t port_;
     std::atomic<bool> connected_;

@@ -1,12 +1,10 @@
 #pragma once
 
 #include <QWidget>
-#include <QDialog>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QLabel>
 #include <QPushButton>
-#include <QSpinBox>
 #include <QLineEdit>
 #include <QTextEdit>
 #include <QVBoxLayout>
@@ -21,7 +19,7 @@ namespace rebear {
 namespace gui {
 
 /**
- * @brief Custom widget for displaying hex data with interactive patching
+ * @brief Interactive hex editor with inline editing
  */
 class HexDisplay : public QWidget {
     Q_OBJECT
@@ -29,41 +27,34 @@ class HexDisplay : public QWidget {
 public:
     explicit HexDisplay(QWidget* parent = nullptr);
 
-    // Load flash data from file
     bool loadFlashData(const std::string& filename);
-
-    // Set the patch manager
     void setPatchManager(rebear::PatchManager* manager);
-
-    // Navigate to address
     void gotoAddress(uint32_t address);
-
-    // Highlight a range (e.g., from transaction)
     void highlightRange(uint32_t address, uint32_t count);
-
-    // Clear highlights
     void clearHighlights();
-
-    // Refresh display (e.g., after patches change)
     void refresh();
+    
+    // Editing
+    void setByteValue(uint32_t address, uint8_t value);
+    uint8_t getByteValue(uint32_t address) const;
+    std::map<uint32_t, uint8_t> getModifiedBytes() const { return modifiedBytes_; }
+    void clearModifications();
+    void applyModificationsAsPatches();
 
 signals:
-    // Emitted when user creates/modifies a patch
+    void modificationsChanged();  // Emitted when user edits bytes
     void patchCreated(const rebear::Patch& patch);
-
-    // Emitted when user wants to apply patches
-    void applyPatchesRequested();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
 private:
     void calculateLayout();
-    void drawHexView(QPainter& painter);
     void drawAddressColumn(QPainter& painter);
     void drawHexColumn(QPainter& painter);
     void drawAsciiColumn(QPainter& painter);
@@ -71,17 +62,19 @@ private:
     uint32_t getByteAtPosition(const QPoint& pos) const;
     QRect getByteRect(uint32_t address) const;
     
-    void showByteEditDialog(uint32_t address);
-    uint8_t getNextAvailablePatchId() const;
+    void startEditing(uint32_t address);
+    void commitEdit();
+    void cancelEdit();
 
     // Data
     std::vector<uint8_t> flashData_;
+    std::map<uint32_t, uint8_t> modifiedBytes_;  // Modified bytes overlay
     rebear::PatchManager* patchManager_;
     
     // View state
-    uint32_t scrollOffset_;      // Current scroll position (in bytes)
-    uint32_t bytesPerRow_;       // Bytes per row (typically 16)
-    uint32_t visibleRows_;       // Number of visible rows
+    uint32_t scrollOffset_;
+    uint32_t bytesPerRow_;
+    uint32_t visibleRows_;
     
     // Highlighting
     struct Highlight {
@@ -99,13 +92,23 @@ private:
     int asciiColumnWidth_;
     int rowHeight_;
     
-    // Mouse interaction
+    // Mouse/keyboard interaction
     uint32_t hoveredByte_;
     bool isHovering_;
+    
+    // Selection for copy/paste
+    bool hasSelection_;
+    uint32_t selectionStart_;
+    uint32_t selectionEnd_;
+    
+    // Inline editing state
+    bool isEditing_;
+    uint32_t editAddress_;
+    QString editBuffer_;
 };
 
 /**
- * @brief Complete hex viewer widget with controls
+ * @brief Complete hex viewer with modification panel
  */
 class HexViewer : public QWidget {
     Q_OBJECT
@@ -113,30 +116,17 @@ class HexViewer : public QWidget {
 public:
     explicit HexViewer(QWidget* parent = nullptr);
 
-    // Load flash data
     bool loadFlashData(const std::string& filename);
-
-    // Set the patch manager
     void setPatchManager(rebear::PatchManager* manager);
-
-    // Navigate to address
     void gotoAddress(uint32_t address);
-
-    // Highlight transaction data
     void highlightTransaction(uint32_t address, uint32_t count);
-
-    // Refresh display
     void refresh();
 
 signals:
-    // Emitted when user creates a patch
     void patchCreated(const rebear::Patch& patch);
-
-    // Emitted when user wants to apply patches
     void applyPatchesRequested();
 
 public slots:
-    // Handle transaction clicks from TransactionViewer
     void onTransactionClicked(uint32_t address);
 
 private slots:
@@ -144,9 +134,15 @@ private slots:
     void onSearchClicked();
     void onClearHighlightsClicked();
     void onLoadFlashClicked();
+    void onModificationsChanged();
+    void onApplyModifications();
+    void onClearModifications();
+    void onGenerateCommand();
 
 private:
     void setupUi();
+    void updateModificationPanel();
+    std::vector<rebear::Patch> calculateOptimizedPatches() const;
 
     // Widgets
     HexDisplay* hexDisplay_;
@@ -157,55 +153,13 @@ private:
     QPushButton* btnClearHighlights_;
     QPushButton* btnLoadFlash_;
     QLabel* lblStatus_;
-    QScrollBar* scrollBar_;
-};
-
-/**
- * @brief Dialog for editing a byte and creating/modifying a patch
- */
-class ByteEditDialog : public QDialog {
-    Q_OBJECT
-
-public:
-    explicit ByteEditDialog(uint32_t address, uint8_t currentValue, 
-                           uint8_t originalValue, uint8_t patchId,
-                           QWidget* parent = nullptr);
-
-    // Get the patch data (8 bytes starting at address)
-    std::array<uint8_t, 8> getPatchData() const;
-
-    // Get patch ID
-    uint8_t getPatchId() const { return patchId_; }
-
-private slots:
-    void onByteValueChanged();
-    void onApplyClicked();
-
-private:
-    void setupUi();
-
-    uint32_t address_;
-    uint8_t originalValue_;
-    uint8_t patchId_;
     
-    // Widgets
-    QLabel* lblAddress_;
-    QLabel* lblOriginal_;
-    QLabel* lblCurrent_;
-    QSpinBox* spinPatchId_;
-    QLineEdit* editByte0_;
-    QLineEdit* editByte1_;
-    QLineEdit* editByte2_;
-    QLineEdit* editByte3_;
-    QLineEdit* editByte4_;
-    QLineEdit* editByte5_;
-    QLineEdit* editByte6_;
-    QLineEdit* editByte7_;
-    QTextEdit* txtPreview_;
-    QPushButton* btnApply_;
-    QPushButton* btnCancel_;
-    
-    std::array<QLineEdit*, 8> byteEdits_;
+    // Modification panel
+    QTextEdit* txtModifications_;
+    QPushButton* btnApplyModifications_;
+    QPushButton* btnClearModifications_;
+    QPushButton* btnGenerateCommand_;
+    QLabel* lblModCount_;
 };
 
 } // namespace gui

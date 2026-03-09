@@ -1,6 +1,5 @@
 #include "rebear/protocol.h"
 #include <cstring>
-#include <arpa/inet.h>
 
 namespace rebear {
 namespace protocol {

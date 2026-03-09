@@ -41,8 +41,8 @@ add_executable(rebear-gui ${GUI_SOURCES} ${GUI_HEADERS} ${GUI_UIS})
 target_link_libraries(rebear-gui
     PRIVATE
         rebear
-        Qt5::Core
-        Qt5::Widgets
+        Qt${QT_VERSION_MAJOR}::Core
+        Qt${QT_VERSION_MAJOR}::Widgets
 )
 
 # Installation

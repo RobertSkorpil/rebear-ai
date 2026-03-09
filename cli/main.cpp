@@ -304,115 +304,107 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
     constexpr bool isLocalSpi = std::is_same<SPIType, rebear::SPIProtocol>::value;
     
     if (subcommand == "set") {
-        // Parse arguments
-        uint8_t id = 0;
-        uint32_t address = 0;
-        std::string dataStr;
+        // Parse arguments - can have multiple patch definitions
+        std::vector<rebear::Patch> patches;
         
         for (int i = 3; i < argc; i++) {
             std::string arg = argv[i];
-            if (arg == "--id" && i + 1 < argc) {
-                id = std::stoi(argv[++i]);
-            } else if (arg == "--address" && i + 1 < argc) {
-                address = parseAddress(argv[++i]);
-            } else if (arg == "--data" && i + 1 < argc) {
-                dataStr = argv[++i];
+            if (arg == "--address" && i + 1 < argc) {
+                // Start new patch
+                rebear::Patch patch;
+                patch.address = parseAddress(argv[++i]);
+                patch.enabled = true;
+                patch.id = static_cast<uint8_t>(patches.size()); // Auto-assign ID
+                
+                // Next arg should be --data
+                if (i + 1 < argc && std::string(argv[i + 1]) == "--data") {
+                    ++i; // Skip --data
+                    if (i + 1 < argc) {
+                        std::string dataStr = argv[++i];
+                        
+                        if (dataStr.length() % 2 != 0) {
+                            std::cerr << "Error: --data must be even number of hex characters" << std::endl;
+                            return 1;
+                        }
+                        
+                        auto dataBytes = parseHexString(dataStr);
+                        if (dataBytes.empty()) {
+                            std::cerr << "Error: Invalid hex data" << std::endl;
+                            return 1;
+                        }
+                        
+                        patch.data = dataBytes;
+                        patches.push_back(patch);
+                    } else {
+                        std::cerr << "Error: --data requires hex string argument" << std::endl;
+                        return 1;
+                    }
+                } else {
+                    std::cerr << "Error: --address must be followed by --data" << std::endl;
+                    return 1;
+                }
             } else if (arg == "--device" && i + 1 < argc) {
                 // Skip device argument, already handled
                 ++i;
             }
         }
         
-        if (dataStr.empty()) {
-            std::cerr << "Error: --data required (hex string, e.g., 0102030405060708 for 8 bytes)" << std::endl;
+        if (patches.empty()) {
+            std::cerr << "Error: No patches specified. Use --address 0xXXXXXX --data HEXBYTES" << std::endl;
+            std::cerr << "Example: rebear-cli patch set --address 0x1000 --data FF00AA --address 0x2000 --data BBCCDD" << std::endl;
             return 1;
         }
         
-        if (dataStr.length() % 2 != 0) {
-            std::cerr << "Error: --data must be even number of hex characters" << std::endl;
+        if (patches.size() > 8) {
+            std::cerr << "Error: Too many patches (" << patches.size() << "). Hardware supports maximum 8 patches per buffer." << std::endl;
             return 1;
         }
         
-        auto dataBytes = parseHexString(dataStr);
-        if (dataBytes.empty()) {
-            std::cerr << "Error: Invalid hex data" << std::endl;
-            return 1;
-        }
-        
-        rebear::Patch patch;
-        patch.id = id;
-        patch.address = address;
-        patch.data = dataBytes;  // Variable length
-        patch.enabled = true;
-        
-        if (!patchMgr.addPatch(patch)) {
-            std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
-            return 1;
+        // Add all patches to manager
+        for (const auto& patch : patches) {
+            if (!patchMgr.addPatch(patch)) {
+                std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
+                return 1;
+            }
         }
         
         // Show verbose info if requested
         if (g_verbose || g_dry_run) {
             std::cout << "\n=== Patch Configuration ===" << std::endl;
-            std::cout << "Patch ID: " << static_cast<int>(id) << std::endl;
-            std::cout << "Address: 0x" << std::hex << address << std::dec << std::endl;
-            std::cout << "Data length: " << dataBytes.size() << " bytes" << std::endl;
-            std::cout << "Enabled: " << (patch.enabled ? "yes" : "no") << std::endl;
+            std::cout << "Number of patches: " << patches.size() << std::endl;
+            
+            for (size_t i = 0; i < patches.size(); ++i) {
+                const auto& patch = patches[i];
+                std::cout << "\nPatch " << (i+1) << ":" << std::endl;
+                std::cout << "  ID: " << static_cast<int>(patch.id) << std::endl;
+                std::cout << "  Address: 0x" << std::hex << patch.address << std::dec << std::endl;
+                std::cout << "  Data length: " << patch.data.size() << " bytes" << std::endl;
+                std::cout << "  Enabled: " << (patch.enabled ? "yes" : "no") << std::endl;
+            }
             
             // Build and show the SPI buffer
-            std::vector<rebear::Patch> patchList = {patch};
-            auto buffer = buildPatchBuffer(patchList);
+            auto buffer = buildPatchBuffer(patches);
             
             std::cout << "\n=== SPI Buffer (before escape encoding) ===" << std::endl;
             printHexData("Raw buffer", buffer);
-            
-            // Show header breakdown
-            std::cout << "\n=== Buffer Structure ===" << std::endl;
-            std::cout << "Command byte: 0x" << std::hex << std::setw(2) << std::setfill('0') 
-                      << static_cast<int>(buffer[0]) << std::dec << " (CMD_SET_PATCH)" << std::endl;
-            std::cout << "\nPatch Header:" << std::endl;
-            std::cout << "  STORED:       0x" << std::hex << std::setw(2) << std::setfill('0') 
-                      << static_cast<int>(buffer[1]) << std::dec 
-                      << (buffer[1] == 0x80 ? " (enabled)" : " (disabled)") << std::endl;
-            std::cout << "  ADDRESS:      0x" << std::hex << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(buffer[2]) << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(buffer[3]) << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(buffer[4]) << std::dec << std::endl;
-            std::cout << "  LENGTH:       0x" << std::hex << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(buffer[5]) << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(buffer[6]) << std::dec 
-                      << " (" << dataBytes.size() << " bytes)" << std::endl;
-            std::cout << "  DATA_OFFSET:  0x" << std::hex << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(buffer[7]) << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(buffer[8]) << std::dec << std::endl;
-            std::cout << "\nTerminator: 0x" << std::hex << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(buffer[9]) << std::dec << std::endl;
-            std::cout << "\nPatch Data (" << dataBytes.size() << " bytes at offset " 
-                      << ((buffer[7] << 8) | buffer[8]) << "):" << std::endl;
-            std::cout << "  ";
-            for (size_t i = 0; i < dataBytes.size(); ++i) {
-                if (i > 0 && i % 16 == 0) std::cout << "\n  ";
-                std::cout << std::hex << std::setw(2) << std::setfill('0') 
-                          << static_cast<int>(dataBytes[i]) << " ";
-            }
-            std::cout << std::dec << std::endl;
+            std::cout << "Total buffer size: " << buffer.size() << " bytes" << std::endl;
         }
         
         // If dry-run, stop here
         if (g_dry_run) {
-            std::cout << "\n[DRY RUN] Patch not sent to FPGA" << std::endl;
+            std::cout << "\n[DRY RUN] Patches not sent to FPGA" << std::endl;
             return 0;
         }
         
-        // Apply to FPGA
+        // Apply to FPGA using buffer upload
         bool success = false;
         
         if (g_verbose && isLocalSpi) {
             // Use verbose version to capture MISO data (only for local SPI)
             std::vector<uint8_t> misoData;
-            std::vector<rebear::Patch> patchList = {patch};
             
             if constexpr (std::is_same<SPIType, rebear::SPIProtocol>::value) {
-                success = spi.uploadPatchBufferVerbose(patchList, misoData);
+                success = spi.uploadPatchBufferVerbose(patches, misoData);
                 
                 if (success && !misoData.empty()) {
                     std::cout << "\n=== FPGA Response (MISO) ===" << std::endl;
@@ -420,20 +412,19 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
                 }
             }
         } else {
-            success = patchMgr.applyAll(spi);
+            success = patchMgr.applyAllBuffer(spi);
             if (g_verbose && !isLocalSpi) {
                 std::cout << "\n[Note: MISO data capture not available in network mode]" << std::endl;
             }
         }
         
         if (!success) {
-            std::cerr << "Error: Failed to apply patch: " << patchMgr.getLastError() << std::endl;
+            std::cerr << "Error: Failed to apply patches: " << patchMgr.getLastError() << std::endl;
             spi.close();
             return 1;
         }
         
-        std::cout << "\nPatch " << static_cast<int>(id) << " set at address 0x"
-                  << std::hex << address << std::dec << std::endl;
+        std::cout << "\n" << patches.size() << " patch(es) applied successfully" << std::endl;
         
         spi.close();
         
@@ -914,20 +905,19 @@ void printHelp() {
     std::cout << "\nExamples:" << std::endl;
     std::cout << "  # Local mode (direct hardware access)" << std::endl;
     std::cout << "  rebear-cli monitor --duration 30" << std::endl;
-    std::cout << "  rebear-cli patch set --id 0 --address 0x001000 --data 0102030405060708" << std::endl;
-    std::cout << "  rebear-cli patch set --id 1 --address 0x002000 --data DEADBEEF" << std::endl;
-    std::cout << "  rebear-cli patch set --id 2 --address 0x003000 --data $(cat data.hex)" << std::endl;
+    std::cout << "  rebear-cli patch set --address 0x001000 --data 0102030405060708" << std::endl;
+    std::cout << "  rebear-cli patch set --address 0x001000 --data FF --address 0x002000 --data DEADBEEF" << std::endl;
     std::cout << "\n  # Network mode (remote hardware access)" << std::endl;
     std::cout << "  rebear-cli --remote raspberrypi.local monitor --duration 30" << std::endl;
     std::cout << "  rebear-cli --remote tcp://192.168.1.100:9876 button click" << std::endl;
     std::cout << "  rebear-cli --remote pi3:9876 export --output log.csv" << std::endl;
-    std::cout << "\n  # Patch data can be variable length (1 byte to ~16KB)" << std::endl;
-    std::cout << "  rebear-cli patch set --id 0 --address 0x1000 --data FF        # 1 byte" << std::endl;
-    std::cout << "  rebear-cli patch set --id 1 --address 0x2000 --data DEADBEEF  # 4 bytes" << std::endl;
+    std::cout << "\n  # Multiple patches (up to 8 per command)" << std::endl;
+    std::cout << "  rebear-cli patch set --address 0x1000 --data FF --address 0x2000 --data AABB" << std::endl;
+    std::cout << "  rebear-cli patch set --address 0x1000 --data DEADBEEF --address 0x2000 --data CAFEBABE" << std::endl;
     std::cout << "\n  # Verbose and dry-run modes" << std::endl;
-    std::cout << "  rebear-cli -v patch set --id 0 --address 0x1000 --data DEADBEEF" << std::endl;
-    std::cout << "  rebear-cli --dry patch set --id 0 --address 0x1000 --data DEADBEEF" << std::endl;
-    std::cout << "  rebear-cli -v --dry patch set --id 0 --address 0x1000 --data DEADBEEF" << std::endl;
+    std::cout << "  rebear-cli -v patch set --address 0x1000 --data DEADBEEF" << std::endl;
+    std::cout << "  rebear-cli --dry patch set --address 0x1000 --data DEADBEEF" << std::endl;
+    std::cout << "  rebear-cli -v --dry patch set --address 0x1000 --data FF --address 0x2000 --data AA" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
