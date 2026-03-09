@@ -68,6 +68,32 @@ public:
     bool setPatch(const Patch& patch);
     
     /**
+     * @brief Command 0x02: Upload multiple patches in a single buffer
+     * 
+     * Uploads a buffer containing multiple patch headers and data.
+     * Each patch can have variable-length data (1 byte to ~16KB).
+     * 
+     * Buffer format:
+     *   [PATCH_HEADER_0, PATCH_HEADER_1, ..., TERMINATOR, PATCH_DATA_0, PATCH_DATA_1, ...]
+     * 
+     * PATCH_HEADER (8 bytes):
+     *   - STORED (1 byte): 0x80 if enabled, 0x00 if disabled
+     *   - PATCH_ADDRESS (3 bytes, big-endian)
+     *   - PATCH_LENGTH (2 bytes, big-endian): actual length of patch data
+     *   - BUFFER_DATA (2 bytes, big-endian): offset of patch data in buffer
+     * 
+     * TERMINATOR: Single 0x00 byte
+     * 
+     * IMPORTANT: Hardware supports maximum 8 patch headers per buffer.
+     * The 9th header position is reserved for the terminating header.
+     * Maximum total buffer size is ~16KB.
+     * 
+     * @param patches Vector of patches to upload (max 8, variable data lengths)
+     * @return true if successful, false otherwise
+     */
+    bool uploadPatchBuffer(const std::vector<Patch>& patches);
+    
+    /**
      * @brief Command 0x03: Clear all patches in FPGA
      * @return true if successful, false otherwise
      */

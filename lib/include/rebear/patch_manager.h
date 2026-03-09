@@ -8,6 +8,9 @@
 
 namespace rebear {
 
+// Forward declaration
+class SPIProtocolNetwork;
+
 /**
  * @brief High-level patch management class
  * 
@@ -96,6 +99,64 @@ public:
             }
         }
         return allSuccess;
+    }
+    
+    /**
+     * @brief Apply all patches to FPGA using buffer upload
+     *
+     * Sends all patches in a single buffer to the FPGA via the provided SPIProtocol instance.
+     * This is more efficient than applyAll() as it sends all patches in one SPI transaction.
+     *
+     * @param spi Connected SPIProtocol instance (local only, requires uploadPatchBuffer method)
+     * @return true if upload succeeded, false otherwise
+     */
+    bool applyAllBuffer(SPIProtocol& spi) {
+        std::vector<Patch> patchList;
+        patchList.reserve(patches_.size());
+        
+        for (const auto& pair : patches_) {
+            patchList.push_back(pair.second);
+        }
+        
+        if (patchList.empty()) {
+            return true; // Nothing to apply
+        }
+        
+        if (!spi.uploadPatchBuffer(patchList)) {
+            setError("Failed to upload patch buffer: " + spi.getLastError());
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * @brief Apply all patches to FPGA using buffer upload (network version)
+     *
+     * Sends all patches in a single buffer to the FPGA via the provided SPIProtocolNetwork instance.
+     * This is more efficient than applyAll() as it sends all patches in one network request.
+     *
+     * @param spi Connected SPIProtocolNetwork instance
+     * @return true if upload succeeded, false otherwise
+     */
+    bool applyAllBuffer(SPIProtocolNetwork& spi) {
+        std::vector<Patch> patchList;
+        patchList.reserve(patches_.size());
+        
+        for (const auto& pair : patches_) {
+            patchList.push_back(pair.second);
+        }
+        
+        if (patchList.empty()) {
+            return true; // Nothing to apply
+        }
+        
+        if (!spi.uploadPatchBuffer(patchList)) {
+            setError("Failed to upload patch buffer: " + spi.getLastError());
+            return false;
+        }
+        
+        return true;
     }
 
     /**

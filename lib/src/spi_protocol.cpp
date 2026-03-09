@@ -15,6 +15,9 @@ constexpr uint8_t CMD_READ_TRANSACTION = 0x01;
 constexpr uint8_t CMD_SET_PATCH = 0x02;
 constexpr uint8_t CMD_CLEAR_PATCHES = 0x03;
 
+// Hardware limitations
+constexpr size_t MAX_PATCHES_PER_BUFFER = 8;  // FPGA supports up to 8 patch headers
+
 // Expected response sizes (before escape decoding)
 constexpr size_t TRANSACTION_RESPONSE_SIZE = 8;
 constexpr size_t PATCH_DATA_SIZE = 12;
@@ -139,23 +142,78 @@ bool SPIProtocol::setPatch(const Patch& patch) {
         return false;
     }
     
-    // Build patch data: command + ID + address (3 bytes) + data (8 bytes)
-    std::vector<uint8_t> patchData;
-    patchData.reserve(13);
+    // Create a single-patch buffer and upload it
+    std::vector<Patch> patches = {patch};
+    return uploadPatchBuffer(patches);
+}
+
+bool SPIProtocol::uploadPatchBuffer(const std::vector<Patch>& patches) {
+    if (!isConnected()) {
+        setError("SPI device not connected");
+        return false;
+    }
     
-    patchData.push_back(CMD_SET_PATCH);
-    patchData.push_back(patch.id);
+    // Hardware limitation: maximum 8 patch headers
+    if (patches.size() > MAX_PATCHES_PER_BUFFER) {
+        setError("Too many patches: hardware supports maximum " + 
+                 std::to_string(MAX_PATCHES_PER_BUFFER) + " patches per buffer (got " + 
+                 std::to_string(patches.size()) + ")");
+        return false;
+    }
     
-    // Address (24-bit, big-endian)
-    patchData.push_back((patch.address >> 16) & 0xFF);
-    patchData.push_back((patch.address >> 8) & 0xFF);
-    patchData.push_back(patch.address & 0xFF);
+    // Validate all patches
+    for (const auto& patch : patches) {
+        if (!patch.isValid()) {
+            setError("Invalid patch configuration in buffer");
+            return false;
+        }
+    }
     
-    // Data (8 bytes)
-    patchData.insert(patchData.end(), patch.data.begin(), patch.data.end());
+    // Build patch buffer:
+    // CMD_SET_PATCH + [PATCH_HEADER_0, PATCH_HEADER_1, ..., TERMINATOR] + [PATCH_DATA_0, PATCH_DATA_1, ...]
+    std::vector<uint8_t> buffer;
+    
+    // Command byte
+    buffer.push_back(CMD_SET_PATCH);
+    
+    // Calculate data section start offset (relative to buffer start, AFTER command byte)
+    // 8 bytes per header + 1 byte (terminator)
+    size_t dataOffset = (patches.size() * 8) + 1;
+    size_t currentDataOffset = dataOffset;
+    
+    // Write patch headers
+    for (const auto& patch : patches) {
+        // STORED (1 byte): 0x80 for enabled, 0x00 for disabled
+        buffer.push_back(patch.enabled ? 0x80 : 0x00);
+        
+        // PATCH_ADDRESS (3 bytes, big-endian)
+        buffer.push_back((patch.address >> 16) & 0xFF);
+        buffer.push_back((patch.address >> 8) & 0xFF);
+        buffer.push_back(patch.address & 0xFF);
+        
+        // PATCH_LENGTH (2 bytes, big-endian) - actual data length
+        uint16_t length = static_cast<uint16_t>(patch.data.size());
+        buffer.push_back((length >> 8) & 0xFF);
+        buffer.push_back(length & 0xFF);
+        
+        // BUFFER_DATA offset (2 bytes, big-endian)
+        // Offset is relative to the buffer structure (after command byte)
+        buffer.push_back((currentDataOffset >> 8) & 0xFF);
+        buffer.push_back(currentDataOffset & 0xFF);
+        
+        currentDataOffset += patch.data.size();
+    }
+    
+    // Write terminating header (just the STORED byte = 0)
+    buffer.push_back(0x00);
+    
+    // Write patch data
+    for (const auto& patch : patches) {
+        buffer.insert(buffer.end(), patch.data.begin(), patch.data.end());
+    }
     
     // Encode and send
-    auto encoded = encode(patchData);
+    auto encoded = encode(buffer);
     std::vector<uint8_t> dummy;
     
     return transfer(encoded, dummy, 0);

@@ -141,35 +141,149 @@ bool CommandHandler::handleSpiReadTransaction(const std::vector<uint8_t>& payloa
 bool CommandHandler::handleSpiSetPatch(const std::vector<uint8_t>& payload, std::vector<uint8_t>& response) {
     std::lock_guard<std::mutex> lock(spi_mutex_);
     
-    // Parse payload
-    size_t offset = 0;
-    uint8_t id;
-    uint32_t address;
-    std::array<uint8_t, 8> data;
-    uint8_t enabled;
-    
-    if (!protocol::decodeByte(payload, offset, id) ||
-        !protocol::decodeUint32(payload, offset, address) ||
-        !protocol::decodeByte(payload, offset, data[0]) ||
-        !protocol::decodeByte(payload, offset, data[1]) ||
-        !protocol::decodeByte(payload, offset, data[2]) ||
-        !protocol::decodeByte(payload, offset, data[3]) ||
-        !protocol::decodeByte(payload, offset, data[4]) ||
-        !protocol::decodeByte(payload, offset, data[5]) ||
-        !protocol::decodeByte(payload, offset, data[6]) ||
-        !protocol::decodeByte(payload, offset, data[7]) ||
-        !protocol::decodeByte(payload, offset, enabled)) {
+    if (payload.empty()) {
         protocol::encodeByte(response, 0);  // failure
         return false;
     }
     
-    // Create patch
-    Patch patch(id, address, data, enabled != 0);
+    // Detect format based on payload structure
+    // Old format: id(1) + address(4) + data(8) + enabled(1) = 14 bytes minimum
+    // New format: headers + terminator + data (varies, minimum 9 bytes for 1 patch)
     
-    // Set patch
-    bool success = spi_->setPatch(patch);
-    protocol::encodeByte(response, success ? 1 : 0);
-    return success;
+    size_t offset = 0;
+    
+    // Check if this is the new buffer format by examining the first byte
+    // In new format, first byte is STORED (0x80 or 0x00)
+    // In old format, first byte is patch ID (0-15)
+    
+    // Try to detect new format: first byte is 0x80 or 0x00, and we have at least 9 bytes
+    bool isNewFormat = (payload.size() >= 9) && 
+                       (payload[0] == 0x80 || payload[0] == 0x00);
+    
+    // Additional check: if old format, we should have exactly 14 bytes
+    if (payload.size() == 14 && payload[0] <= 15) {
+        isNewFormat = false;
+    }
+    
+    if (isNewFormat) {
+        // New buffer format - parse multiple patches
+        std::vector<Patch> patches;
+        
+        // Parse headers
+        while (offset < payload.size()) {
+            uint8_t stored;
+            if (!protocol::decodeByte(payload, offset, stored)) {
+                protocol::encodeByte(response, 0);  // failure
+                return false;
+            }
+            
+            // Check for terminator
+            if (stored == 0x00) {
+                // Could be terminator or disabled patch
+                // Terminator is just a single 0x00 byte
+                // If we have more bytes, check if it's followed by patch headers
+                if (offset >= payload.size() || offset == 1) {
+                    // This is the terminator
+                    break;
+                }
+                // Otherwise, it's a disabled patch, continue parsing
+            }
+            
+            // Parse patch header
+            uint32_t address = 0;
+            uint16_t length = 0;
+            uint16_t dataOffset = 0;
+            
+            // PATCH_ADDRESS (3 bytes, big-endian)
+            uint8_t addr_high, addr_mid, addr_low;
+            if (!protocol::decodeByte(payload, offset, addr_high) ||
+                !protocol::decodeByte(payload, offset, addr_mid) ||
+                !protocol::decodeByte(payload, offset, addr_low)) {
+                protocol::encodeByte(response, 0);  // failure
+                return false;
+            }
+            address = (static_cast<uint32_t>(addr_high) << 16) |
+                      (static_cast<uint32_t>(addr_mid) << 8) |
+                      static_cast<uint32_t>(addr_low);
+            
+            // PATCH_LENGTH (2 bytes, big-endian)
+            if (!protocol::decodeUint16(payload, offset, length)) {
+                protocol::encodeByte(response, 0);  // failure
+                return false;
+            }
+            
+            // BUFFER_DATA (2 bytes, big-endian)
+            if (!protocol::decodeUint16(payload, offset, dataOffset)) {
+                protocol::encodeByte(response, 0);  // failure
+                return false;
+            }
+            
+            // Store patch info
+            Patch patch;
+            patch.id = patches.size();  // Assign sequential IDs
+            patch.address = address;
+            patch.enabled = (stored == 0x80);
+            
+            // Read patch data from offset
+            if (dataOffset + length > payload.size()) {
+                protocol::encodeByte(response, 0);  // failure
+                return false;
+            }
+            
+            // Copy patch data
+            if (length == 8) {
+                std::copy(payload.begin() + dataOffset, 
+                         payload.begin() + dataOffset + 8, 
+                         patch.data.begin());
+            } else {
+                protocol::encodeByte(response, 0);  // failure - invalid length
+                return false;
+            }
+            
+            patches.push_back(patch);
+        }
+        
+        // Apply all patches
+        bool allSuccess = true;
+        for (const auto& patch : patches) {
+            if (!spi_->setPatch(patch)) {
+                allSuccess = false;
+            }
+        }
+        
+        protocol::encodeByte(response, allSuccess ? 1 : 0);
+        return allSuccess;
+        
+    } else {
+        // Old format - single patch
+        uint8_t id;
+        uint32_t address;
+        std::array<uint8_t, 8> data;
+        uint8_t enabled;
+        
+        if (!protocol::decodeByte(payload, offset, id) ||
+            !protocol::decodeUint32(payload, offset, address) ||
+            !protocol::decodeByte(payload, offset, data[0]) ||
+            !protocol::decodeByte(payload, offset, data[1]) ||
+            !protocol::decodeByte(payload, offset, data[2]) ||
+            !protocol::decodeByte(payload, offset, data[3]) ||
+            !protocol::decodeByte(payload, offset, data[4]) ||
+            !protocol::decodeByte(payload, offset, data[5]) ||
+            !protocol::decodeByte(payload, offset, data[6]) ||
+            !protocol::decodeByte(payload, offset, data[7]) ||
+            !protocol::decodeByte(payload, offset, enabled)) {
+            protocol::encodeByte(response, 0);  // failure
+            return false;
+        }
+        
+        // Create patch
+        Patch patch(id, address, data, enabled != 0);
+        
+        // Set patch
+        bool success = spi_->setPatch(patch);
+        protocol::encodeByte(response, success ? 1 : 0);
+        return success;
+    }
 }
 
 bool CommandHandler::handleSpiClearPatches(const std::vector<uint8_t>& payload, std::vector<uint8_t>& response) {

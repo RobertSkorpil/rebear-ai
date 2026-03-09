@@ -176,6 +176,86 @@ bool SPIProtocolNetwork::setPatch(const Patch& patch) {
     return success != 0;
 }
 
+bool SPIProtocolNetwork::uploadPatchBuffer(const std::vector<Patch>& patches) {
+    if (!connected_) {
+        setError("Not connected");
+        return false;
+    }
+    
+    // Hardware limitation: maximum 8 patch headers
+    if (patches.size() > 8) {
+        setError("Too many patches: hardware supports maximum 8 patches per buffer (got " + 
+                 std::to_string(patches.size()) + ")");
+        return false;
+    }
+    
+    // Validate all patches
+    for (const auto& patch : patches) {
+        if (!patch.isValid()) {
+            setError("Invalid patch configuration in buffer");
+            return false;
+        }
+    }
+    
+    // Build patch buffer (same format as local SPI protocol)
+    std::vector<uint8_t> payload;
+    
+    // Calculate data section start offset (relative to buffer start, NOT including command)
+    // 8 bytes per header + 1 byte terminator
+    size_t dataOffset = (patches.size() * 8) + 1;
+    size_t currentDataOffset = dataOffset;
+    
+    // Write patch headers
+    for (const auto& patch : patches) {
+        // STORED (1 byte): 0x80 for enabled, 0x00 for disabled
+        protocol::encodeByte(payload, patch.enabled ? 0x80 : 0x00);
+        
+        // PATCH_ADDRESS (3 bytes, big-endian)
+        protocol::encodeByte(payload, (patch.address >> 16) & 0xFF);
+        protocol::encodeByte(payload, (patch.address >> 8) & 0xFF);
+        protocol::encodeByte(payload, patch.address & 0xFF);
+        
+        // PATCH_LENGTH (2 bytes, big-endian) - actual data length
+        uint16_t length = static_cast<uint16_t>(patch.data.size());
+        protocol::encodeByte(payload, (length >> 8) & 0xFF);
+        protocol::encodeByte(payload, length & 0xFF);
+        
+        // BUFFER_DATA offset (2 bytes, big-endian)
+        // Offset is relative to the buffer structure (not including command byte)
+        protocol::encodeByte(payload, (currentDataOffset >> 8) & 0xFF);
+        protocol::encodeByte(payload, currentDataOffset & 0xFF);
+        
+        currentDataOffset += patch.data.size();
+    }
+    
+    // Write terminating header (just the STORED byte = 0)
+    protocol::encodeByte(payload, 0x00);
+    
+    // Write patch data
+    for (const auto& patch : patches) {
+        for (size_t i = 0; i < patch.data.size(); i++) {
+            protocol::encodeByte(payload, patch.data[i]);
+        }
+    }
+    
+    // Send SPI_SET_PATCH command with buffer
+    std::vector<uint8_t> response;
+    if (!client_->sendRequest(protocol::CommandType::SPI_SET_PATCH, payload, response)) {
+        setError("Upload patch buffer failed: " + client_->getLastError());
+        return false;
+    }
+    
+    // Parse response
+    size_t offset = 0;
+    uint8_t success;
+    if (!protocol::decodeByte(response, offset, success)) {
+        setError("Invalid upload patch buffer response");
+        return false;
+    }
+    
+    return success != 0;
+}
+
 bool SPIProtocolNetwork::clearPatches() {
     if (!connected_) {
         setError("Not connected");

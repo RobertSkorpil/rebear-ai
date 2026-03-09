@@ -1,9 +1,10 @@
-FAKED - NOT RECORDED!!!
+Connected to FPGA on /dev/spidev0.0
+
+Monitoring transactions (Press CTRL+C to stop)...
 
 Time(ms)    Address     Count     
 ----------------------------------
-0           0x21d       PATCHING
-130         0xf8021d    4
+130         0xfc021d    27954     
 
 ----------------------------------
 Total transactions: 1
