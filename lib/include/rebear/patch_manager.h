@@ -139,25 +139,7 @@ public:
      * @param spi Connected SPIProtocolNetwork instance
      * @return true if upload succeeded, false otherwise
      */
-    bool applyAllBuffer(SPIProtocolNetwork& spi) {
-        std::vector<Patch> patchList;
-        patchList.reserve(patches_.size());
-        
-        for (const auto& pair : patches_) {
-            patchList.push_back(pair.second);
-        }
-        
-        if (patchList.empty()) {
-            return true; // Nothing to apply
-        }
-        
-        if (!spi.uploadPatchBuffer(patchList)) {
-            setError("Failed to upload patch buffer: " + spi.getLastError());
-            return false;
-        }
-        
-        return true;
-    }
+    bool applyAllBuffer(SPIProtocolNetwork& spi);
 
     /**
      * @brief Clear all patches (local and FPGA)

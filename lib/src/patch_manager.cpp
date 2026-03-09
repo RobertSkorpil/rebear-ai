@@ -1,4 +1,5 @@
 #include "rebear/patch_manager.h"
+#include "rebear/spi_protocol_network.h"
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -221,6 +222,26 @@ bool PatchManager::loadFromFile(const std::string& filename) {
 
     // Success - replace current patches
     patches_ = std::move(newPatches);
+    return true;
+}
+
+bool PatchManager::applyAllBuffer(SPIProtocolNetwork& spi) {
+    std::vector<Patch> patchList;
+    patchList.reserve(patches_.size());
+    
+    for (const auto& pair : patches_) {
+        patchList.push_back(pair.second);
+    }
+    
+    if (patchList.empty()) {
+        return true; // Nothing to apply
+    }
+    
+    if (!spi.uploadPatchBuffer(patchList)) {
+        setError("Failed to upload patch buffer: " + spi.getLastError());
+        return false;
+    }
+    
     return true;
 }
 
