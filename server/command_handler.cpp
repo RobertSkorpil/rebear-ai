@@ -244,6 +244,7 @@ bool CommandHandler::handleSpiSetPatch(const std::vector<uint8_t>& payload, std:
         // Apply all patches using buffer upload
         if (!spi_->uploadPatchBuffer(patches)) {
             protocol::encodeByte(response, 0);  // failure
+            protocol::encodeString(response, spi_->getLastError());
             return false;
         }
         

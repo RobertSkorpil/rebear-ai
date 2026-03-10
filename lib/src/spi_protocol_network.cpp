@@ -253,7 +253,18 @@ bool SPIProtocolNetwork::uploadPatchBuffer(const std::vector<Patch>& patches) {
         return false;
     }
     
-    return success != 0;
+    if (!success) {
+        // Read error message if present
+        std::string errorMsg;
+        if (protocol::decodeString(response, offset, errorMsg)) {
+            setError("Upload patch buffer failed: " + errorMsg);
+        } else {
+            setError("Upload patch buffer failed");
+        }
+        return false;
+    }
+    
+    return true;
 }
 
 bool SPIProtocolNetwork::dumpPatchBuffer(std::vector<uint8_t>& buffer) {
