@@ -308,27 +308,23 @@ bool SPIProtocol::dumpPatchBuffer(std::vector<uint8_t>& buffer) {
     
     // Send command 0x03 to dump patch buffer
     // The FPGA responds with: [16-bit size (big-endian)][buffer content]
-    // 
-    // Strategy: Since we don't know the size beforehand, we'll:
-    // 1. Send command + read 2 bytes to get size
-    // 2. Continue reading the remaining buffer content
+    // All in ONE continuous SPI transaction (can't pause/resume)
     //
-    // BUT: Due to SPI full-duplex nature, we need to send enough dummy bytes
-    // to clock out all the data in a single transaction.
-    //
-    // Max buffer size is ~16KB, so we'll read up to that amount.
+    // Strategy: Read a reasonable max size in one transaction
+    // Typical patch buffer: ~100-500 bytes for a few patches
+    // Max we'll support: 2048 bytes
     
-    const size_t MAX_BUFFER_SIZE = 16384;  // 16KB
+    const size_t MAX_BUFFER_SIZE = 2048;
     
     // Build command: CMD_DUMP_PATCH_BUFFER + dummy bytes to read response
-    // We need to send enough dummy bytes to receive: 2 bytes (size) + up to MAX_BUFFER_SIZE
     std::vector<uint8_t> txData = {CMD_DUMP_PATCH_BUFFER};
-    txData.resize(1 + 2 + MAX_BUFFER_SIZE, 0xFF);  // Command + size + max buffer
+    txData.resize(1 + 2 + MAX_BUFFER_SIZE, 0xFF);  // Command + size(2) + max buffer
     
-    // Encode and send
+    // Encode and send - this creates the final wire data with escape encoding
     auto encoded = encode(txData);
     std::vector<uint8_t> rxData;
     
+    // Transfer: request size(2) + buffer(up to MAX_BUFFER_SIZE)
     if (!transfer(encoded, rxData, 2 + MAX_BUFFER_SIZE)) {
         return false;
     }
@@ -344,7 +340,7 @@ bool SPIProtocol::dumpPatchBuffer(std::vector<uint8_t>& buffer) {
     
     // Validate size
     if (bufferSize > MAX_BUFFER_SIZE) {
-        setError("Invalid buffer size: " + std::to_string(bufferSize) + " (max: " + std::to_string(MAX_BUFFER_SIZE) + ")");
+        setError("Buffer size " + std::to_string(bufferSize) + " exceeds maximum " + std::to_string(MAX_BUFFER_SIZE));
         return false;
     }
     
