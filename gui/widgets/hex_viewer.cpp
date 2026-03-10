@@ -9,6 +9,8 @@
 #include <QClipboard>
 #include <QFont>
 #include <QFontMetrics>
+#include <QTimer>
+#include <QMenu>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -333,6 +335,11 @@ void HexDisplay::mousePressEvent(QMouseEvent* event) {
                 update();
             }
         }
+    } else if (event->button() == Qt::RightButton) {
+        uint32_t address = getByteAtPosition(event->pos());
+        if (address != 0xFFFFFFFF && address < flashData_.size()) {
+            showContextMenu(event->globalPosition().toPoint(), address);
+        }
     }
 }
 
@@ -530,14 +537,72 @@ void HexDisplay::cancelEdit() {
     update();
 }
 
+void HexDisplay::showContextMenu(const QPoint& globalPos, uint32_t address) {
+    QMenu menu;
+    
+    // Check if byte is modified
+    bool isModified = modifiedBytes_.find(address) != modifiedBytes_.end();
+    
+    // Check if byte is patched
+    bool isPatched = false;
+    if (patchManager_) {
+        auto patches = patchManager_->getPatches();
+        for (const auto& patch : patches) {
+            if (patch.enabled && address >= patch.address && 
+                address < patch.address + patch.data.size()) {
+                isPatched = true;
+                break;
+            }
+        }
+    }
+    
+    uint8_t currentValue = getByteValue(address);
+    uint8_t originalValue = flashData_[address];
+    
+    // Show current and original values
+    QString info = QString("Address: 0x%1\nCurrent: 0x%2\nOriginal: 0x%3")
+        .arg(address, 6, 16, QChar('0')).toUpper()
+        .arg(currentValue, 2, 16, QChar('0')).toUpper()
+        .arg(originalValue, 2, 16, QChar('0')).toUpper();
+    
+    QAction* infoAction = menu.addAction(info);
+    infoAction->setEnabled(false);
+    
+    menu.addSeparator();
+    
+    // Restore original value option
+    if (isModified) {
+        QAction* restoreAction = menu.addAction("Restore Original Value");
+        connect(restoreAction, &QAction::triggered, [this, address]() {
+            modifiedBytes_.erase(address);
+            update();
+            emit modificationsChanged();
+        });
+    }
+    
+    // Show patch info if byte is patched
+    if (isPatched) {
+        QAction* patchedAction = menu.addAction("(Byte is patched by Patch Manager)");
+        patchedAction->setEnabled(false);
+    }
+    
+    menu.exec(globalPos);
+}
+
 // ============================================================================
 // HexViewer - Main Widget
 // ============================================================================
 
 HexViewer::HexViewer(QWidget* parent)
     : QWidget(parent)
+    , autoApplyEnabled_(true)
 {
     setupUi();
+    
+    autoApplyTimer_ = new QTimer(this);
+    autoApplyTimer_->setSingleShot(true);
+    autoApplyTimer_->setInterval(300);
+    connect(autoApplyTimer_, &QTimer::timeout, this, &HexViewer::applyModificationsAutomatically);
 }
 
 void HexViewer::setupUi() {
@@ -551,11 +616,8 @@ void HexViewer::setupUi() {
     btnGoto_ = new QPushButton("Go To", this);
     connect(btnGoto_, &QPushButton::clicked, this, &HexViewer::onGotoClicked);
     
-    editSearch_ = new QLineEdit(this);
-    editSearch_->setPlaceholderText("Search (hex bytes)");
-    
-    btnSearch_ = new QPushButton("Search", this);
-    connect(btnSearch_, &QPushButton::clicked, this, &HexViewer::onSearchClicked);
+    // Connect Enter key to Go To button
+    connect(editGotoAddress_, &QLineEdit::returnPressed, this, &HexViewer::onGotoClicked);
     
     btnClearHighlights_ = new QPushButton("Clear Highlights", this);
     connect(btnClearHighlights_, &QPushButton::clicked, this, &HexViewer::onClearHighlightsClicked);
@@ -638,6 +700,13 @@ void HexViewer::setFlashData(const std::vector<uint8_t>& data) {
     onModificationsChanged();
 }
 
+void HexViewer::setAutoApplyEnabled(bool enabled) {
+    autoApplyEnabled_ = enabled;
+    if (!enabled) {
+        autoApplyTimer_->stop();
+    }
+}
+
 void HexViewer::setPatchManager(rebear::PatchManager* manager) {
     hexDisplay_->setPatchManager(manager);
 }
@@ -673,10 +742,6 @@ void HexViewer::onGotoClicked() {
     }
 }
 
-void HexViewer::onSearchClicked() {
-    QMessageBox::information(this, "Search", "Search functionality not yet implemented");
-}
-
 void HexViewer::onClearHighlightsClicked() {
     hexDisplay_->clearHighlights();
 }
@@ -692,6 +757,10 @@ void HexViewer::onLoadFlashClicked() {
 
 void HexViewer::onModificationsChanged() {
     updateModificationPanel();
+    
+    if (autoApplyEnabled_) {
+        autoApplyTimer_->start();
+    }
 }
 
 void HexViewer::updateModificationPanel() {
@@ -884,6 +953,21 @@ void HexViewer::onGenerateCommand() {
                "Patches: %2 (sent in one buffer)")
                .arg(preview)
                .arg(patches.size()));
+}
+
+void HexViewer::applyModificationsAutomatically() {
+    auto patches = calculateOptimizedPatches();
+    if (patches.empty()) return;
+    
+    if (patches.size() > 8) {
+        return;
+    }
+    
+    for (const auto& patch : patches) {
+        emit patchCreated(patch);
+    }
+    
+    emit autoApplyPatches();
 }
 
 } // namespace gui

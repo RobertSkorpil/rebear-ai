@@ -66,6 +66,7 @@ private:
     void startEditing(uint32_t address);
     void commitEdit();
     void cancelEdit();
+    void showContextMenu(const QPoint& globalPos, uint32_t address);
 
     // Data
     std::vector<uint8_t> flashData_;
@@ -123,17 +124,19 @@ public:
     void gotoAddress(uint32_t address);
     void highlightTransaction(uint32_t address, uint32_t count);
     void refresh();
+    
+    void setAutoApplyEnabled(bool enabled);
 
 signals:
     void patchCreated(const rebear::Patch& patch);
     void applyPatchesRequested();
+    void autoApplyPatches();
 
 public slots:
     void onTransactionClicked(uint32_t address);
 
 private slots:
     void onGotoClicked();
-    void onSearchClicked();
     void onClearHighlightsClicked();
     void onLoadFlashClicked();
     void onModificationsChanged();
@@ -145,13 +148,12 @@ private:
     void setupUi();
     void updateModificationPanel();
     std::vector<rebear::Patch> calculateOptimizedPatches() const;
+    void applyModificationsAutomatically();
 
     // Widgets
     HexDisplay* hexDisplay_;
     QLineEdit* editGotoAddress_;
     QPushButton* btnGoto_;
-    QLineEdit* editSearch_;
-    QPushButton* btnSearch_;
     QPushButton* btnClearHighlights_;
     QPushButton* btnLoadFlash_;
     QLabel* lblStatus_;
@@ -162,6 +164,10 @@ private:
     QPushButton* btnClearModifications_;
     QPushButton* btnGenerateCommand_;
     QLabel* lblModCount_;
+    
+    // Auto-apply timer
+    QTimer* autoApplyTimer_;
+    bool autoApplyEnabled_;
 };
 
 } // namespace gui

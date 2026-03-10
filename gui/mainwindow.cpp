@@ -298,15 +298,36 @@ void MainWindow::createCentralWidget()
                 }
             });
     
+    connect(hexViewer_, &rebear::gui::HexViewer::autoApplyPatches,
+            this, [this]() {
+                if (!isConnected_) return;
+                bool success = false;
+                if (useNetwork_) {
+                    success = patchManager_->applyAllBuffer(*spiNetwork_);
+                } else {
+#if defined(__linux__) && !defined(__APPLE__)
+                    success = patchManager_->applyAllBuffer(*spi_);
+#endif
+                }
+                if (success) {
+                    updateStatusBar("Patches auto-applied");
+                    logMessage("Patches automatically applied to FPGA");
+                    hexViewer_->refresh();
+                } else {
+                    logMessage(QString("Auto-apply failed: %1")
+                              .arg(QString::fromStdString(patchManager_->getLastError())));
+                }
+            });
+    
     connect(patchEditor_, &rebear::gui::PatchEditor::applyAllRequested,
             this, [this]() {
                 if (!isConnected_) return;
                 bool success = false;
                 if (useNetwork_) {
-                    success = patchManager_->applyAll(*spiNetwork_);
+                    success = patchManager_->applyAllBuffer(*spiNetwork_);
                 } else {
 #if defined(__linux__) && !defined(__APPLE__)
-                    success = patchManager_->applyAll(*spi_);
+                    success = patchManager_->applyAllBuffer(*spi_);
 #endif
                 }
                 if (success) {
@@ -639,10 +660,10 @@ void MainWindow::onLoadPatches()
             // Apply all patches to FPGA
             bool applied = false;
             if (useNetwork_) {
-                applied = patchManager_->applyAll(*spiNetwork_);
+                applied = patchManager_->applyAllBuffer(*spiNetwork_);
             } else {
 #if defined(__linux__) && !defined(__APPLE__)
-                applied = patchManager_->applyAll(*spi_);
+                applied = patchManager_->applyAllBuffer(*spi_);
 #endif
             }
             
