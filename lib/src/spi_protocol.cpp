@@ -311,10 +311,13 @@ bool SPIProtocol::dumpPatchBuffer(std::vector<uint8_t>& buffer) {
     // All in ONE continuous SPI transaction (can't pause/resume)
     //
     // Strategy: Read a reasonable max size in one transaction
-    // Typical patch buffer: ~100-500 bytes for a few patches
-    // Max we'll support: 2048 bytes
+    // Hardware supports up to 8 patches. Typical buffer: 
+    // - 8 headers (8 bytes each) = 64 bytes
+    // - 1 terminator = 1 byte  
+    // - 8 patches * ~16 bytes data = ~128 bytes
+    // Total: ~200 bytes typical, 512 bytes to be safe
     
-    const size_t MAX_BUFFER_SIZE = 2048;
+    const size_t MAX_BUFFER_SIZE = 512;
     
     // Build command: CMD_DUMP_PATCH_BUFFER + dummy bytes to read response
     std::vector<uint8_t> txData = {CMD_DUMP_PATCH_BUFFER};
