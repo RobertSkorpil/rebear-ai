@@ -110,7 +110,7 @@ QVariant PatchModel::headerData(int section, Qt::Orientation orientation, int ro
             case COL_ADDRESS:
                 return QString("Address");
             case COL_DATA:
-                return QString("Data (8 bytes)");
+                return QString("Data");
             case COL_ENABLED:
                 return QString("Status");
         }
@@ -145,8 +145,8 @@ void PatchDialog::setupUi() {
     editAddress_->setMaxLength(6);
 
     editData_ = new QLineEdit(this);
-    editData_->setPlaceholderText("e.g., 0102030405060708");
-    editData_->setMaxLength(16);
+    editData_->setPlaceholderText("e.g., 0102030405060708 (variable length, max 512 bytes)");
+    editData_->setMaxLength(1024);  // 512 bytes = 1024 hex characters
     connect(editData_, &QLineEdit::textChanged, this, &PatchDialog::onDataTextChanged);
 
     lblDataPreview_ = new QLabel(this);
@@ -200,11 +200,16 @@ rebear::Patch PatchDialog::getPatch() const {
     bool ok;
     patch.address = editAddress_->text().toUInt(&ok, 16);
 
-    // Parse data
+    // Parse data - variable length
     QString dataStr = editData_->text();
-    for (size_t i = 0; i < 8 && i * 2 < static_cast<size_t>(dataStr.length()); ++i) {
-        QString byteStr = dataStr.mid(i * 2, 2);
-        patch.data[i] = byteStr.toUInt(&ok, 16);
+    patch.data.clear();
+    
+    // Parse all hex byte pairs
+    for (int i = 0; i * 2 < dataStr.length(); ++i) {
+        if (i * 2 + 1 < dataStr.length()) {
+            QString byteStr = dataStr.mid(i * 2, 2);
+            patch.data.push_back(static_cast<uint8_t>(byteStr.toUInt(&ok, 16)));
+        }
     }
 
     patch.enabled = true;
@@ -228,16 +233,27 @@ void PatchDialog::onDataTextChanged() {
     }
 
     // Update preview
-    if (cleaned.length() == 16) {
-        QString preview = "Bytes: ";
-        for (int i = 0; i < 8; ++i) {
+    if (cleaned.length() >= 2 && cleaned.length() % 2 == 0) {
+        int numBytes = cleaned.length() / 2;
+        QString preview = QString("%1 bytes: ").arg(numBytes);
+        
+        // Show first few bytes
+        int showBytes = std::min(numBytes, 8);
+        for (int i = 0; i < showBytes; ++i) {
             if (i > 0) preview += " ";
             preview += cleaned.mid(i * 2, 2);
         }
+        if (numBytes > 8) {
+            preview += QString(" ... (+%1 more)").arg(numBytes - 8);
+        }
+        
         lblDataPreview_->setText(preview);
         lblDataPreview_->setStyleSheet("QLabel { background-color: #d0ffd0; padding: 5px; }");
     } else {
-        lblDataPreview_->setText(QString("Need 16 hex characters (have %1)").arg(cleaned.length()));
+        QString msg = cleaned.length() % 2 == 0 ? 
+            QString("Need at least 2 hex characters (have %1)").arg(cleaned.length()) :
+            QString("Need even number of hex characters (have %1)").arg(cleaned.length());
+        lblDataPreview_->setText(msg);
         lblDataPreview_->setStyleSheet("QLabel { background-color: #ffd0d0; padding: 5px; }");
     }
 }
@@ -254,9 +270,15 @@ bool PatchDialog::validateData() {
 
     // Validate data
     QString dataStr = editData_->text();
-    if (dataStr.length() != 16) {
+    if (dataStr.length() < 2 || dataStr.length() % 2 != 0) {
         QMessageBox::warning(this, "Invalid Data", 
-            "Data must be exactly 16 hex characters (8 bytes)");
+            "Data must be at least 2 hex characters and an even number of characters");
+        return false;
+    }
+    
+    if (dataStr.length() > 1024) {  // 512 bytes max
+        QMessageBox::warning(this, "Invalid Data", 
+            "Data exceeds maximum length of 512 bytes (1024 hex characters)");
         return false;
     }
 

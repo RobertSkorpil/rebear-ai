@@ -235,14 +235,8 @@ bool CommandHandler::handleSpiSetPatch(const std::vector<uint8_t>& payload, std:
             }
             
             // Copy patch data
-            if (length == 8) {
-                std::copy(payload.begin() + dataOffset, 
-                         payload.begin() + dataOffset + 8, 
-                         patch.data.begin());
-            } else {
-                protocol::encodeByte(response, 0);  // failure - invalid length
-                return false;
-            }
+            patch.data.assign(payload.begin() + dataOffset, 
+                            payload.begin() + dataOffset + length);
             
             patches.push_back(patch);
         }
