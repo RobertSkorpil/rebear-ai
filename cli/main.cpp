@@ -564,13 +564,22 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
             std::cout << std::string(50, '-') << std::endl;
             
             for (const auto& p : patches) {
-                std::cout << std::left << std::setw(6) << static_cast<int>(p.id)
-                          << "0x" << std::hex << std::setw(10) << p.address << std::dec << " ";
+                std::cout << std::left << std::setw(6) << static_cast<int>(p.id);
+                
+                // Format address
+                std::stringstream addrStream;
+                addrStream << "0x" << std::hex << std::setw(6) << std::setfill('0') << p.address;
+                std::cout << std::left << std::setw(12) << addrStream.str() << std::dec;
+                
+                // Format data
+                std::stringstream dataStream;
                 for (const auto& byte : p.data) {
-                    std::cout << std::hex << std::setw(2) << std::setfill('0')
+                    dataStream << std::hex << std::setw(2) << std::setfill('0')
                               << static_cast<int>(byte);
                 }
-                std::cout << std::dec << "  " << (p.enabled ? "Active" : "Disabled") << std::endl;
+                std::cout << std::left << std::setw(20) << dataStream.str() << std::dec;
+                
+                std::cout << (p.enabled ? "Active" : "Disabled") << std::endl;
             }
             
             std::cout << "\nTotal: " << patches.size() << " patches" << std::endl;
