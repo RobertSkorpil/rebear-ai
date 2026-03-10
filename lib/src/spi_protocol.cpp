@@ -307,20 +307,46 @@ bool SPIProtocol::dumpPatchBuffer(std::vector<uint8_t>& buffer) {
     }
     
     // Send command 0x03 to dump patch buffer
-    // First, we need to read the 16-bit size prefix (big-endian)
-    std::vector<uint8_t> sizeResponse;
-    if (!sendCommandWithResponse(CMD_DUMP_PATCH_BUFFER, 2, sizeResponse)) {
+    // The FPGA responds with: [16-bit size (big-endian)][buffer content]
+    // 
+    // Strategy: Since we don't know the size beforehand, we'll:
+    // 1. Send command + read 2 bytes to get size
+    // 2. Continue reading the remaining buffer content
+    //
+    // BUT: Due to SPI full-duplex nature, we need to send enough dummy bytes
+    // to clock out all the data in a single transaction.
+    //
+    // Max buffer size is ~16KB, so we'll read up to that amount.
+    
+    const size_t MAX_BUFFER_SIZE = 16384;  // 16KB
+    
+    // Build command: CMD_DUMP_PATCH_BUFFER + dummy bytes to read response
+    // We need to send enough dummy bytes to receive: 2 bytes (size) + up to MAX_BUFFER_SIZE
+    std::vector<uint8_t> txData = {CMD_DUMP_PATCH_BUFFER};
+    txData.resize(1 + 2 + MAX_BUFFER_SIZE, 0xFF);  // Command + size + max buffer
+    
+    // Encode and send
+    auto encoded = encode(txData);
+    std::vector<uint8_t> rxData;
+    
+    if (!transfer(encoded, rxData, 2 + MAX_BUFFER_SIZE)) {
         return false;
     }
     
-    // Check if we got exactly 2 bytes for the size
-    if (sizeResponse.size() != 2) {
-        setError("Invalid size response: expected 2 bytes, got " + std::to_string(sizeResponse.size()));
+    // The response should have at least 2 bytes for the size
+    if (rxData.size() < 2) {
+        setError("Invalid response: expected at least 2 bytes for size, got " + std::to_string(rxData.size()));
         return false;
     }
     
-    // Parse size (big-endian)
-    uint16_t bufferSize = (static_cast<uint16_t>(sizeResponse[0]) << 8) | sizeResponse[1];
+    // Parse size (big-endian) from first 2 bytes
+    uint16_t bufferSize = (static_cast<uint16_t>(rxData[0]) << 8) | rxData[1];
+    
+    // Validate size
+    if (bufferSize > MAX_BUFFER_SIZE) {
+        setError("Invalid buffer size: " + std::to_string(bufferSize) + " (max: " + std::to_string(MAX_BUFFER_SIZE) + ")");
+        return false;
+    }
     
     // If size is 0, buffer is empty
     if (bufferSize == 0) {
@@ -328,26 +354,14 @@ bool SPIProtocol::dumpPatchBuffer(std::vector<uint8_t>& buffer) {
         return true;
     }
     
-    // Read the actual buffer content
-    std::vector<uint8_t> contentResponse;
-    
-    // We need to continue reading from the SPI bus
-    // Create a dummy TX buffer and read the content
-    std::vector<uint8_t> dummyTx(bufferSize, 0xFF);
-    auto encoded = encode(dummyTx);
-    
-    if (!transfer(encoded, contentResponse, bufferSize)) {
+    // Extract the buffer content (skip the 2-byte size prefix)
+    if (rxData.size() < 2 + bufferSize) {
+        setError("Incomplete buffer: expected " + std::to_string(2 + bufferSize) + 
+                 " bytes, got " + std::to_string(rxData.size()));
         return false;
     }
     
-    // Check if we got the expected amount of data
-    if (contentResponse.size() != bufferSize) {
-        setError("Invalid buffer content size: expected " + std::to_string(bufferSize) + 
-                 " bytes, got " + std::to_string(contentResponse.size()));
-        return false;
-    }
-    
-    buffer = contentResponse;
+    buffer.assign(rxData.begin() + 2, rxData.begin() + 2 + bufferSize);
     return true;
 }
 

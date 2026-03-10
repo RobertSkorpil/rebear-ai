@@ -431,6 +431,7 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
     } else if (subcommand == "list") {
         std::string format = "text";
         std::string filename;
+        bool fromFile = false;
         
         for (int i = 3; i < argc; i++) {
             std::string arg = argv[i];
@@ -438,18 +439,95 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
                 format = argv[++i];
             } else if (arg == "--file" && i + 1 < argc) {
                 filename = argv[++i];
+                fromFile = true;
+            } else if (arg == "--device" && i + 1 < argc) {
+                // Skip device argument, already handled
+                ++i;
             }
         }
         
-        if (!filename.empty()) {
+        std::vector<rebear::Patch> patches;
+        
+        if (fromFile) {
+            // Load from file
             if (!patchMgr.loadFromFile(filename)) {
                 std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
                 return 1;
             }
+            patches = patchMgr.getPatches();
+        } else {
+            // Dump from FPGA and parse the buffer
+            std::vector<uint8_t> buffer;
+            if (!spi.dumpPatchBuffer(buffer)) {
+                std::cerr << "Error: Failed to dump patch buffer: " << spi.getLastError() << std::endl;
+                spi.close();
+                return 1;
+            }
+            
+            if (buffer.empty()) {
+                std::cout << "No patches loaded in FPGA" << std::endl;
+                spi.close();
+                return 0;
+            }
+            
+            // Parse the buffer to extract patches
+            // Buffer format: [HEADER_0, HEADER_1, ..., TERMINATOR, DATA_0, DATA_1, ...]
+            // Each header: STORED(1) + ADDRESS(3) + LENGTH(2) + OFFSET(2) = 8 bytes
+            
+            size_t offset = 0;
+            uint8_t patchId = 0;
+            
+            // Parse headers
+            while (offset < buffer.size()) {
+                // Read STORED byte
+                uint8_t stored = buffer[offset++];
+                
+                // Check for terminator (0x00 with no more header data)
+                if (stored == 0x00 && offset >= buffer.size()) {
+                    break;  // Terminator
+                }
+                
+                if (offset + 7 > buffer.size()) {
+                    break;  // Not enough data for a full header
+                }
+                
+                // Parse patch header
+                uint32_t address = (static_cast<uint32_t>(buffer[offset]) << 16) |
+                                  (static_cast<uint32_t>(buffer[offset + 1]) << 8) |
+                                  static_cast<uint32_t>(buffer[offset + 2]);
+                offset += 3;
+                
+                uint16_t length = (static_cast<uint16_t>(buffer[offset]) << 8) |
+                                 static_cast<uint16_t>(buffer[offset + 1]);
+                offset += 2;
+                
+                uint16_t dataOffset = (static_cast<uint16_t>(buffer[offset]) << 8) |
+                                     static_cast<uint16_t>(buffer[offset + 1]);
+                offset += 2;
+                
+                // Check for terminator (stored == 0x00 means terminator or disabled)
+                if (stored == 0x00) {
+                    break;  // Terminator found
+                }
+                
+                // Extract patch data
+                if (dataOffset + length > buffer.size()) {
+                    std::cerr << "Warning: Invalid patch data offset/length" << std::endl;
+                    break;
+                }
+                
+                rebear::Patch patch;
+                patch.id = patchId++;
+                patch.address = address;
+                patch.enabled = (stored == 0x80);
+                patch.data.assign(buffer.begin() + dataOffset, 
+                                 buffer.begin() + dataOffset + length);
+                
+                patches.push_back(patch);
+            }
         }
         
-        auto patches = patchMgr.getPatches();
-        
+        // Display patches
         if (format == "json") {
             std::cout << "{" << std::endl;
             std::cout << "  \"patches\": [" << std::endl;
@@ -474,7 +552,11 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
             std::cout << "  ]" << std::endl;
             std::cout << "}" << std::endl;
         } else {
-            std::cout << "Active patches:" << std::endl;
+            if (fromFile) {
+                std::cout << "Patches from file:" << std::endl;
+            } else {
+                std::cout << "Patches loaded in FPGA:" << std::endl;
+            }
             std::cout << std::left << std::setw(6) << "ID"
                       << std::setw(12) << "Address"
                       << std::setw(20) << "Data"
@@ -483,7 +565,7 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
             
             for (const auto& p : patches) {
                 std::cout << std::left << std::setw(6) << static_cast<int>(p.id)
-                          << "0x" << std::hex << std::setw(10) << p.address << std::dec;
+                          << "0x" << std::hex << std::setw(10) << p.address << std::dec << " ";
                 for (const auto& byte : p.data) {
                     std::cout << std::hex << std::setw(2) << std::setfill('0')
                               << static_cast<int>(byte);
@@ -493,6 +575,8 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
             
             std::cout << "\nTotal: " << patches.size() << " patches" << std::endl;
         }
+        
+        spi.close();
         
     } else if (subcommand == "clear") {
         bool clearAll = false;

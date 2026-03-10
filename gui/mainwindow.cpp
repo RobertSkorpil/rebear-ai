@@ -737,7 +737,7 @@ void MainWindow::onDumpPatchBuffer()
             logMessage("Patch buffer dump: buffer is empty");
         } else {
             // Show buffer in hex viewer
-            hexViewer_->setData(buffer);
+            hexViewer_->setFlashData(buffer);
             
             // Log summary
             QString message = QString("Patch buffer dumped: %1 bytes").arg(buffer.size());

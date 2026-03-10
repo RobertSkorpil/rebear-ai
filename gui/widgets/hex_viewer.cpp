@@ -65,6 +65,13 @@ bool HexDisplay::loadFlashData(const std::string& filename) {
     return true;
 }
 
+void HexDisplay::setFlashData(const std::vector<uint8_t>& data) {
+    flashData_ = data;
+    scrollOffset_ = 0;
+    modifiedBytes_.clear();
+    update();
+}
+
 void HexDisplay::setPatchManager(rebear::PatchManager* manager) {
     patchManager_ = manager;
     update();
@@ -623,6 +630,12 @@ bool HexViewer::loadFlashData(const std::string& filename) {
     }
     lblStatus_->setText("Failed to load flash data");
     return false;
+}
+
+void HexViewer::setFlashData(const std::vector<uint8_t>& data) {
+    hexDisplay_->setFlashData(data);
+    lblStatus_->setText(QString("Data loaded: %1 bytes").arg(data.size()));
+    onModificationsChanged();
 }
 
 void HexViewer::setPatchManager(rebear::PatchManager* manager) {

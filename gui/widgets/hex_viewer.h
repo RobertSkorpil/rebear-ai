@@ -28,6 +28,7 @@ public:
     explicit HexDisplay(QWidget* parent = nullptr);
 
     bool loadFlashData(const std::string& filename);
+    void setFlashData(const std::vector<uint8_t>& data);
     void setPatchManager(rebear::PatchManager* manager);
     void gotoAddress(uint32_t address);
     void highlightRange(uint32_t address, uint32_t count);
@@ -117,6 +118,7 @@ public:
     explicit HexViewer(QWidget* parent = nullptr);
 
     bool loadFlashData(const std::string& filename);
+    void setFlashData(const std::vector<uint8_t>& data);
     void setPatchManager(rebear::PatchManager* manager);
     void gotoAddress(uint32_t address);
     void highlightTransaction(uint32_t address, uint32_t count);
