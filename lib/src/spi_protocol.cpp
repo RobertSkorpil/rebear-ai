@@ -13,7 +13,7 @@ namespace rebear {
 constexpr uint8_t CMD_CLEAR_TRANSACTIONS = 0x00;
 constexpr uint8_t CMD_READ_TRANSACTION = 0x01;
 constexpr uint8_t CMD_SET_PATCH = 0x02;
-constexpr uint8_t CMD_CLEAR_PATCHES = 0x03;
+constexpr uint8_t CMD_DUMP_PATCH_BUFFER = 0x03;
 
 // Hardware limitations
 constexpr size_t MAX_PATCHES_PER_BUFFER = 8;  // FPGA supports up to 8 patch headers
@@ -300,13 +300,69 @@ bool SPIProtocol::uploadPatchBufferVerbose(const std::vector<Patch>& patches, st
     return true;
 }
 
+bool SPIProtocol::dumpPatchBuffer(std::vector<uint8_t>& buffer) {
+    if (!isConnected()) {
+        setError("SPI device not connected");
+        return false;
+    }
+    
+    // Send command 0x03 to dump patch buffer
+    // First, we need to read the 16-bit size prefix (big-endian)
+    std::vector<uint8_t> sizeResponse;
+    if (!sendCommandWithResponse(CMD_DUMP_PATCH_BUFFER, 2, sizeResponse)) {
+        return false;
+    }
+    
+    // Check if we got exactly 2 bytes for the size
+    if (sizeResponse.size() != 2) {
+        setError("Invalid size response: expected 2 bytes, got " + std::to_string(sizeResponse.size()));
+        return false;
+    }
+    
+    // Parse size (big-endian)
+    uint16_t bufferSize = (static_cast<uint16_t>(sizeResponse[0]) << 8) | sizeResponse[1];
+    
+    // If size is 0, buffer is empty
+    if (bufferSize == 0) {
+        buffer.clear();
+        return true;
+    }
+    
+    // Read the actual buffer content
+    std::vector<uint8_t> contentResponse;
+    
+    // We need to continue reading from the SPI bus
+    // Create a dummy TX buffer and read the content
+    std::vector<uint8_t> dummyTx(bufferSize, 0xFF);
+    auto encoded = encode(dummyTx);
+    
+    if (!transfer(encoded, contentResponse, bufferSize)) {
+        return false;
+    }
+    
+    // Check if we got the expected amount of data
+    if (contentResponse.size() != bufferSize) {
+        setError("Invalid buffer content size: expected " + std::to_string(bufferSize) + 
+                 " bytes, got " + std::to_string(contentResponse.size()));
+        return false;
+    }
+    
+    buffer = contentResponse;
+    return true;
+}
+
 bool SPIProtocol::clearPatches() {
     if (!isConnected()) {
         setError("SPI device not connected");
         return false;
     }
     
-    return sendCommand(CMD_CLEAR_PATCHES);
+    // Clear patches by sending command 0x02 with a single zero byte
+    std::vector<uint8_t> clearData = {CMD_SET_PATCH, 0x00};
+    auto encoded = encode(clearData);
+    std::vector<uint8_t> dummy;
+    
+    return transfer(encoded, dummy, 0);
 }
 
 bool SPIProtocol::isConnected() const {

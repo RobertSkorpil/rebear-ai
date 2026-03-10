@@ -134,6 +134,10 @@ void MainWindow::createActions()
     clearPatchesAction_->setStatusTip(tr("Clear all patches"));
     connect(clearPatchesAction_, &QAction::triggered, this, &MainWindow::onClearPatches);
     
+    dumpPatchBufferAction_ = new QAction(tr("&Dump Patch Buffer"), this);
+    dumpPatchBufferAction_->setStatusTip(tr("Dump patch buffer content from FPGA"));
+    connect(dumpPatchBufferAction_, &QAction::triggered, this, &MainWindow::onDumpPatchBuffer);
+    
     buttonPressAction_ = new QAction(tr("Button &Press"), this);
     buttonPressAction_->setStatusTip(tr("Press teddy bear button"));
     connect(buttonPressAction_, &QAction::triggered, this, &MainWindow::onButtonPress);
@@ -178,6 +182,7 @@ void MainWindow::createMenus()
     toolsMenu_->addAction(loadPatchesAction_);
     toolsMenu_->addAction(savePatchesAction_);
     toolsMenu_->addAction(clearPatchesAction_);
+    toolsMenu_->addAction(dumpPatchBufferAction_);
     toolsMenu_->addSeparator();
     toolsMenu_->addAction(buttonPressAction_);
     toolsMenu_->addAction(buttonReleaseAction_);
@@ -342,6 +347,7 @@ void MainWindow::updateConnectionState(bool connected)
     loadPatchesAction_->setEnabled(connected);
     savePatchesAction_->setEnabled(connected);
     clearPatchesAction_->setEnabled(connected);
+    dumpPatchBufferAction_->setEnabled(connected);
     buttonPressAction_->setEnabled(connected);
     buttonReleaseAction_->setEnabled(connected);
     buttonClickAction_->setEnabled(connected);
@@ -586,7 +592,7 @@ void MainWindow::onPollTransactions()
     
     // Read ALL available transactions in the buffer
     // Keep reading while buffer has data
-    while (true) {
+    for(int i = 0; i < 10; i++) {
         std::optional<rebear::Transaction> trans;
         
         if (useNetwork_) {
@@ -706,6 +712,57 @@ void MainWindow::onClearPatches()
                                QString("Failed to clear patches:\n%1")
                                .arg(QString::fromStdString(patchManager_->getLastError())));
         }
+    }
+}
+
+void MainWindow::onDumpPatchBuffer()
+{
+    if (!isConnected_) return;
+    
+    std::vector<uint8_t> buffer;
+    bool success = false;
+    
+    if (useNetwork_) {
+        success = spiNetwork_->dumpPatchBuffer(buffer);
+    } else {
+#if defined(__linux__) && !defined(__APPLE__)
+        success = spi_->dumpPatchBuffer(buffer);
+#endif
+    }
+    
+    if (success) {
+        // Display the buffer in the hex viewer
+        if (buffer.empty()) {
+            QMessageBox::information(this, "Patch Buffer", "Patch buffer is empty.");
+            logMessage("Patch buffer dump: buffer is empty");
+        } else {
+            // Show buffer in hex viewer
+            hexViewer_->setData(buffer);
+            
+            // Log summary
+            QString message = QString("Patch buffer dumped: %1 bytes").arg(buffer.size());
+            updateStatusBar(message);
+            logMessage(message);
+            
+            // Show info dialog with summary
+            QMessageBox::information(this, "Patch Buffer Dump",
+                                   QString("Successfully dumped patch buffer:\n"
+                                          "Size: %1 bytes\n\n"
+                                          "Buffer content is displayed in the Hex Viewer tab.")
+                                   .arg(buffer.size()));
+        }
+    } else {
+        QString errorMsg;
+        if (useNetwork_) {
+            errorMsg = QString::fromStdString(spiNetwork_->getLastError());
+        } else {
+#if defined(__linux__) && !defined(__APPLE__)
+            errorMsg = QString::fromStdString(spi_->getLastError());
+#endif
+        }
+        
+        QMessageBox::warning(this, "Dump Failed",
+                           QString("Failed to dump patch buffer:\n%1").arg(errorMsg));
     }
 }
 

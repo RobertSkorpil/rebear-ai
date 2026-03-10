@@ -99,6 +99,7 @@ private slots:
     void onLoadPatches();
     void onSavePatches();
     void onClearPatches();
+    void onDumpPatchBuffer();
     
     // Button control
     void onButtonPress();
@@ -136,6 +137,7 @@ private:
     QAction* loadPatchesAction_;
     QAction* savePatchesAction_;
     QAction* clearPatchesAction_;
+    QAction* dumpPatchBufferAction_;
     QAction* exportAction_;
     QAction* exitAction_;
     QAction* settingsAction_;

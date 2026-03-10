@@ -848,9 +848,9 @@ void HexViewer::onGenerateCommand() {
     
     for (const auto& patch : patches) {
         command += QString(" --address 0x%1 --data ")
-                   .arg(patch.address, 6, 16, QChar('0')).toUpper();
+                   .arg(patch.address, 6, 16, QChar('0'));
         
-        // Add hex data
+        // Add hex data (uppercase)
         for (size_t i = 0; i < patch.data.size(); ++i) {
             command += QString("%1").arg(patch.data[i], 2, 16, QChar('0')).toUpper();
         }

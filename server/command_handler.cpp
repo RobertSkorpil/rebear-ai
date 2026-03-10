@@ -46,6 +46,10 @@ bool CommandHandler::handleCommand(const protocol::Message& request, protocol::M
             response.type = CommandType::SPI_SET_PATCH_RESPONSE;
             return handleSpiSetPatch(request.payload, response.payload);
             
+        case CommandType::SPI_DUMP_PATCH_BUFFER:
+            response.type = CommandType::SPI_DUMP_PATCH_BUFFER_RESPONSE;
+            return handleSpiDumpPatchBuffer(request.payload, response.payload);
+            
         case CommandType::SPI_CLEAR_PATCHES:
             response.type = CommandType::SPI_CLEAR_PATCHES_RESPONSE;
             return handleSpiClearPatches(request.payload, response.payload);
@@ -284,6 +288,31 @@ bool CommandHandler::handleSpiSetPatch(const std::vector<uint8_t>& payload, std:
         protocol::encodeByte(response, success ? 1 : 0);
         return success;
     }
+}
+
+bool CommandHandler::handleSpiDumpPatchBuffer(const std::vector<uint8_t>& payload, std::vector<uint8_t>& response) {
+    std::lock_guard<std::mutex> lock(spi_mutex_);
+    
+    std::vector<uint8_t> buffer;
+    bool success = spi_->dumpPatchBuffer(buffer);
+    
+    if (!success) {
+        protocol::encodeByte(response, 0);  // failure
+        return false;
+    }
+    
+    protocol::encodeByte(response, 1);  // success
+    
+    // Encode buffer size (16-bit, big-endian)
+    uint16_t bufferSize = static_cast<uint16_t>(buffer.size());
+    protocol::encodeUint16(response, bufferSize);
+    
+    // Encode buffer content
+    for (uint8_t byte : buffer) {
+        protocol::encodeByte(response, byte);
+    }
+    
+    return true;
 }
 
 bool CommandHandler::handleSpiClearPatches(const std::vector<uint8_t>& payload, std::vector<uint8_t>& response) {

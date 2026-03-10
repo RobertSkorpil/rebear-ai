@@ -100,7 +100,21 @@ public:
     bool uploadPatchBufferVerbose(const std::vector<Patch>& patches, std::vector<uint8_t>& misoData);
     
     /**
-     * @brief Command 0x03: Clear all patches in FPGA
+     * @brief Command 0x03: Dump patch buffer content from FPGA
+     * 
+     * Retrieves the current patch buffer content from the FPGA.
+     * The response is prefixed with a 16-bit size value (big-endian).
+     * 
+     * @param buffer Output vector to receive the patch buffer content (without size prefix)
+     * @return true if successful, false otherwise
+     */
+    bool dumpPatchBuffer(std::vector<uint8_t>& buffer);
+    
+    /**
+     * @brief Clear all patches in FPGA
+     * 
+     * Clears patches by sending SPI command 0x02 with a single zero byte.
+     * 
      * @return true if successful, false otherwise
      */
     bool clearPatches();

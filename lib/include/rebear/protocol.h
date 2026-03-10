@@ -37,8 +37,10 @@ namespace CommandType {
     constexpr uint8_t SPI_READ_TRANSACTION_RESPONSE = 0x17;
     constexpr uint8_t SPI_SET_PATCH = 0x18;
     constexpr uint8_t SPI_SET_PATCH_RESPONSE = 0x19;
-    constexpr uint8_t SPI_CLEAR_PATCHES = 0x1A;
-    constexpr uint8_t SPI_CLEAR_PATCHES_RESPONSE = 0x1B;
+    constexpr uint8_t SPI_DUMP_PATCH_BUFFER = 0x1A;
+    constexpr uint8_t SPI_DUMP_PATCH_BUFFER_RESPONSE = 0x1B;
+    constexpr uint8_t SPI_CLEAR_PATCHES = 0x1C;
+    constexpr uint8_t SPI_CLEAR_PATCHES_RESPONSE = 0x1D;
     
     // GPIO commands (0x20-0x2F)
     constexpr uint8_t GPIO_INIT = 0x20;

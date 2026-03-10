@@ -256,6 +256,54 @@ bool SPIProtocolNetwork::uploadPatchBuffer(const std::vector<Patch>& patches) {
     return success != 0;
 }
 
+bool SPIProtocolNetwork::dumpPatchBuffer(std::vector<uint8_t>& buffer) {
+    if (!connected_) {
+        setError("Not connected");
+        return false;
+    }
+    
+    // Send SPI_DUMP_PATCH_BUFFER command
+    std::vector<uint8_t> payload;
+    std::vector<uint8_t> response;
+    if (!client_->sendRequest(protocol::CommandType::SPI_DUMP_PATCH_BUFFER, payload, response)) {
+        setError("Dump patch buffer failed: " + client_->getLastError());
+        return false;
+    }
+    
+    // Parse response
+    size_t offset = 0;
+    uint8_t success;
+    if (!protocol::decodeByte(response, offset, success)) {
+        setError("Invalid dump patch buffer response");
+        return false;
+    }
+    
+    if (!success) {
+        setError("Dump patch buffer failed on server");
+        return false;
+    }
+    
+    // Read buffer size (16-bit, big-endian)
+    uint16_t bufferSize;
+    if (!protocol::decodeUint16(response, offset, bufferSize)) {
+        setError("Invalid buffer size in response");
+        return false;
+    }
+    
+    // Read buffer content
+    buffer.clear();
+    for (uint16_t i = 0; i < bufferSize; i++) {
+        uint8_t byte;
+        if (!protocol::decodeByte(response, offset, byte)) {
+            setError("Incomplete buffer content in response");
+            return false;
+        }
+        buffer.push_back(byte);
+    }
+    
+    return true;
+}
+
 bool SPIProtocolNetwork::clearPatches() {
     if (!connected_) {
         setError("Not connected");

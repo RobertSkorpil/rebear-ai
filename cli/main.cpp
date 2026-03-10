@@ -590,6 +590,77 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
         
         std::cout << "Saved " << patchMgr.count() << " patches to " << filename << std::endl;
         
+    } else if (subcommand == "dump") {
+        std::string format = "hex";
+        std::string output;
+        
+        for (int i = 3; i < argc; i++) {
+            std::string arg = argv[i];
+            if (arg == "--format" && i + 1 < argc) {
+                format = argv[++i];
+            } else if (arg == "--output" && i + 1 < argc) {
+                output = argv[++i];
+            } else if (arg == "--device" && i + 1 < argc) {
+                // Skip device argument, already handled
+                ++i;
+            }
+        }
+        
+        // Dump patch buffer from FPGA
+        std::vector<uint8_t> buffer;
+        if (!spi.dumpPatchBuffer(buffer)) {
+            std::cerr << "Error: Failed to dump patch buffer: " << spi.getLastError() << std::endl;
+            spi.close();
+            return 1;
+        }
+        
+        if (buffer.empty()) {
+            std::cout << "Patch buffer is empty" << std::endl;
+            spi.close();
+            return 0;
+        }
+        
+        // Output the buffer
+        if (!output.empty()) {
+            // Write to file
+            std::ofstream file(output, std::ios::binary);
+            if (!file.is_open()) {
+                std::cerr << "Error: Failed to open output file: " << output << std::endl;
+                spi.close();
+                return 1;
+            }
+            
+            if (format == "hex") {
+                // Write as hex text
+                for (size_t i = 0; i < buffer.size(); ++i) {
+                    file << std::hex << std::setw(2) << std::setfill('0')
+                         << static_cast<int>(buffer[i]);
+                    if ((i + 1) % 16 == 0) {
+                        file << "\n";
+                    } else {
+                        file << " ";
+                    }
+                }
+                file << std::dec << std::endl;
+            } else if (format == "binary") {
+                // Write as raw binary
+                file.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+            } else {
+                std::cerr << "Error: Unknown format: " << format << std::endl;
+                spi.close();
+                return 1;
+            }
+            
+            file.close();
+            std::cout << "Dumped " << buffer.size() << " bytes to " << output << std::endl;
+        } else {
+            // Print to stdout
+            std::cout << "Patch buffer content (" << buffer.size() << " bytes):" << std::endl;
+            printHexData("Buffer", buffer);
+        }
+        
+        spi.close();
+        
     } else {
         std::cerr << "Unknown subcommand: " << subcommand << std::endl;
         return 1;
@@ -602,7 +673,7 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
 int cmdPatch(int argc, char* argv[]) {
     if (argc < 3) {
         std::cerr << "Usage: rebear-cli patch <subcommand> [options]" << std::endl;
-        std::cerr << "Subcommands: set, list, clear, load, save" << std::endl;
+        std::cerr << "Subcommands: set, list, clear, load, save, dump" << std::endl;
         return 1;
     }
     
@@ -897,7 +968,7 @@ void printHelp() {
     std::cout << "  --dry, --dry-run        Show data to be sent but don't actually send it" << std::endl;
     std::cout << "\nCommands:" << std::endl;
     std::cout << "  monitor     Monitor transactions in real-time" << std::endl;
-    std::cout << "  patch       Manage patches (set, list, clear, load, save)" << std::endl;
+    std::cout << "  patch       Manage patches (set, list, clear, load, save, dump)" << std::endl;
     std::cout << "  button      Control teddy bear button (press, release, click, status)" << std::endl;
     std::cout << "  export      Export transaction log to file" << std::endl;
     std::cout << "  clear       Clear transaction buffer" << std::endl;
@@ -918,6 +989,10 @@ void printHelp() {
     std::cout << "  rebear-cli -v patch set --address 0x1000 --data DEADBEEF" << std::endl;
     std::cout << "  rebear-cli --dry patch set --address 0x1000 --data DEADBEEF" << std::endl;
     std::cout << "  rebear-cli -v --dry patch set --address 0x1000 --data FF --address 0x2000 --data AA" << std::endl;
+    std::cout << "\n  # Dump patch buffer from FPGA" << std::endl;
+    std::cout << "  rebear-cli patch dump" << std::endl;
+    std::cout << "  rebear-cli patch dump --output buffer.hex" << std::endl;
+    std::cout << "  rebear-cli patch dump --output buffer.bin --format binary" << std::endl;
 }
 
 int main(int argc, char* argv[]) {

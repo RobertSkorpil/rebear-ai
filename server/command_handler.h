@@ -45,6 +45,7 @@ private:
     bool handleSpiClearTransactions(const std::vector<uint8_t>& payload, std::vector<uint8_t>& response);
     bool handleSpiReadTransaction(const std::vector<uint8_t>& payload, std::vector<uint8_t>& response);
     bool handleSpiSetPatch(const std::vector<uint8_t>& payload, std::vector<uint8_t>& response);
+    bool handleSpiDumpPatchBuffer(const std::vector<uint8_t>& payload, std::vector<uint8_t>& response);
     bool handleSpiClearPatches(const std::vector<uint8_t>& payload, std::vector<uint8_t>& response);
     
     bool handleGpioInit(const std::vector<uint8_t>& payload, std::vector<uint8_t>& response);
