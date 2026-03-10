@@ -306,40 +306,26 @@ bool SPIProtocol::dumpPatchBuffer(std::vector<uint8_t>& buffer) {
         return false;
     }
     
-    // Send command 0x03 to dump patch buffer
+    // Send command 0x03 and read back size + buffer content
     // The FPGA responds with: [16-bit size (big-endian)][buffer content]
-    // All in ONE continuous SPI transaction (can't pause/resume)
     //
-    // Strategy: Read a reasonable max size in one transaction
-    // Hardware supports up to 8 patches. Typical buffer: 
-    // - 8 headers (8 bytes each) = 64 bytes
-    // - 1 terminator = 1 byte  
-    // - 8 patches * ~16 bytes data = ~128 bytes
-    // Total: ~200 bytes typical, 512 bytes to be safe
-    
+    // Maximum reasonable buffer: 8 patches * 8 bytes header + 1 terminator + data
     const size_t MAX_BUFFER_SIZE = 512;
     
-    // Build command: CMD_DUMP_PATCH_BUFFER + dummy bytes to read response
-    std::vector<uint8_t> txData = {CMD_DUMP_PATCH_BUFFER};
-    txData.resize(1 + 2 + MAX_BUFFER_SIZE, 0xFF);  // Command + size(2) + max buffer
-    
-    // Encode and send - this creates the final wire data with escape encoding
-    auto encoded = encode(txData);
-    std::vector<uint8_t> rxData;
-    
-    // Transfer: request size(2) + buffer(up to MAX_BUFFER_SIZE)
-    if (!transfer(encoded, rxData, 2 + MAX_BUFFER_SIZE)) {
+    // Read size (2 bytes) + max buffer content
+    std::vector<uint8_t> response;
+    if (!sendCommandWithResponse(CMD_DUMP_PATCH_BUFFER, 2 + MAX_BUFFER_SIZE, response)) {
         return false;
     }
     
-    // The response should have at least 2 bytes for the size
-    if (rxData.size() < 2) {
-        setError("Invalid response: expected at least 2 bytes for size, got " + std::to_string(rxData.size()));
+    // Need at least 2 bytes for size
+    if (response.size() < 2) {
+        setError("Invalid response: expected at least 2 bytes for size, got " + std::to_string(response.size()));
         return false;
     }
     
-    // Parse size (big-endian) from first 2 bytes
-    uint16_t bufferSize = (static_cast<uint16_t>(rxData[0]) << 8) | rxData[1];
+    // Parse size (big-endian)
+    uint16_t bufferSize = (static_cast<uint16_t>(response[0]) << 8) | response[1];
     
     // Validate size
     if (bufferSize > MAX_BUFFER_SIZE) {
@@ -353,14 +339,14 @@ bool SPIProtocol::dumpPatchBuffer(std::vector<uint8_t>& buffer) {
         return true;
     }
     
-    // Extract the buffer content (skip the 2-byte size prefix)
-    if (rxData.size() < 2 + bufferSize) {
+    // Extract buffer content (skip 2-byte size prefix)
+    if (response.size() < 2 + bufferSize) {
         setError("Incomplete buffer: expected " + std::to_string(2 + bufferSize) + 
-                 " bytes, got " + std::to_string(rxData.size()));
+                 " bytes, got " + std::to_string(response.size()));
         return false;
     }
     
-    buffer.assign(rxData.begin() + 2, rxData.begin() + 2 + bufferSize);
+    buffer.assign(response.begin() + 2, response.begin() + 2 + bufferSize);
     return true;
 }
 
