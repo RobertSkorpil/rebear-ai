@@ -241,16 +241,14 @@ bool CommandHandler::handleSpiSetPatch(const std::vector<uint8_t>& payload, std:
             patches.push_back(patch);
         }
         
-        // Apply all patches
-        bool allSuccess = true;
-        for (const auto& patch : patches) {
-            if (!spi_->setPatch(patch)) {
-                allSuccess = false;
-            }
+        // Apply all patches using buffer upload
+        if (!spi_->uploadPatchBuffer(patches)) {
+            protocol::encodeByte(response, 0);  // failure
+            return false;
         }
         
-        protocol::encodeByte(response, allSuccess ? 1 : 0);
-        return allSuccess;
+        protocol::encodeByte(response, 1);  // success
+        return true;
         
     } else {
         // Old format - single patch
