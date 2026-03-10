@@ -170,85 +170,57 @@ bool CommandHandler::handleSpiSetPatch(const std::vector<uint8_t>& payload, std:
     }
     
     if (isNewFormat) {
-        // New buffer format - parse multiple patches
-        std::vector<Patch> patches;
+        // New buffer format - the payload is already the correctly formatted buffer
+        // We need to send it as-is with CMD_SET_PATCH prepended
         
-        // Parse headers
-        while (offset < payload.size()) {
-            uint8_t stored;
-            if (!protocol::decodeByte(payload, offset, stored)) {
-                protocol::encodeByte(response, 0);  // failure
-                return false;
-            }
+        // Build complete SPI buffer
+        std::vector<uint8_t> spiData;
+        spiData.reserve(1 + payload.size());
+        spiData.push_back(0x02);  // CMD_SET_PATCH
+        spiData.insert(spiData.end(), payload.begin(), payload.end());
+        
+        // Send via raw SPI - we'll use sendCommand but with the full buffer
+        // Actually, we need to use the low-level interface
+        // The SPIProtocol doesn't expose a way to send arbitrary data...
+        // So we have to parse and re-upload. But let's just forward the buffer correctly.
+        
+        // Parse into patches and re-upload (unfortunately necessary with current API)
+        std::vector<Patch> patches;
+        size_t off = 0;
+        
+        while (off < payload.size()) {
+            if (off + 8 > payload.size()) break;
             
-            // Check for terminator
-            if (stored == 0x00) {
-                // Could be terminator or disabled patch
-                // Terminator is just a single 0x00 byte
-                // If we have more bytes, check if it's followed by patch headers
-                if (offset >= payload.size() || offset == 1) {
-                    // This is the terminator
-                    break;
-                }
-                // Otherwise, it's a disabled patch, continue parsing
-            }
+            uint8_t stored = payload[off++];
+            if (stored == 0x00) break;  // Terminator
             
-            // Parse patch header
-            uint32_t address = 0;
-            uint16_t length = 0;
-            uint16_t dataOffset = 0;
+            uint32_t addr = (payload[off] << 16) | (payload[off+1] << 8) | payload[off+2];
+            off += 3;
             
-            // PATCH_ADDRESS (3 bytes, big-endian)
-            uint8_t addr_high, addr_mid, addr_low;
-            if (!protocol::decodeByte(payload, offset, addr_high) ||
-                !protocol::decodeByte(payload, offset, addr_mid) ||
-                !protocol::decodeByte(payload, offset, addr_low)) {
-                protocol::encodeByte(response, 0);  // failure
-                return false;
-            }
-            address = (static_cast<uint32_t>(addr_high) << 16) |
-                      (static_cast<uint32_t>(addr_mid) << 8) |
-                      static_cast<uint32_t>(addr_low);
+            uint16_t len = (payload[off] << 8) | payload[off+1];
+            off += 2;
             
-            // PATCH_LENGTH (2 bytes, big-endian)
-            if (!protocol::decodeUint16(payload, offset, length)) {
-                protocol::encodeByte(response, 0);  // failure
-                return false;
-            }
+            uint16_t dataOff = (payload[off] << 8) | payload[off+1];
+            off += 2;
             
-            // BUFFER_DATA (2 bytes, big-endian)
-            if (!protocol::decodeUint16(payload, offset, dataOffset)) {
-                protocol::encodeByte(response, 0);  // failure
-                return false;
-            }
+            if (dataOff + len > payload.size()) break;
             
-            // Store patch info
-            Patch patch;
-            patch.id = patches.size();  // Assign sequential IDs
-            patch.address = address;
-            patch.enabled = (stored == 0x80);
-            
-            // Read patch data from offset
-            if (dataOffset + length > payload.size()) {
-                protocol::encodeByte(response, 0);  // failure
-                return false;
-            }
-            
-            // Copy patch data
-            patch.data.assign(payload.begin() + dataOffset, 
-                            payload.begin() + dataOffset + length);
-            
-            patches.push_back(patch);
+            Patch p;
+            p.id = patches.size();
+            p.address = addr;
+            p.enabled = (stored == 0x80);
+            p.data.assign(payload.begin() + dataOff, payload.begin() + dataOff + len);
+            patches.push_back(p);
         }
         
-        // Apply all patches using buffer upload
         if (!spi_->uploadPatchBuffer(patches)) {
-            protocol::encodeByte(response, 0);  // failure
+            std::cerr << "DEBUG: uploadPatchBuffer failed: " << spi_->getLastError() << std::endl;
+            protocol::encodeByte(response, 0);
             protocol::encodeString(response, spi_->getLastError());
             return false;
         }
         
-        protocol::encodeByte(response, 1);  // success
+        protocol::encodeByte(response, 1);
         return true;
         
     } else {
