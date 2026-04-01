@@ -12,6 +12,10 @@
 #include "rebear/transaction.h"
 
 namespace rebear {
+    class Patch;  // Forward declaration
+}
+
+namespace rebear {
 namespace gui {
 
 /**
@@ -34,6 +38,9 @@ public:
 
     // Load flash data for displaying actual bytes
     bool loadFlashData(const std::string& filename);
+    
+    // Set patches for displaying patched data
+    void setPatches(const std::vector<rebear::Patch>* patches);
 
     // QAbstractTableModel interface
     int rowCount(const QModelIndex& parent = QModelIndex()) const override;
@@ -44,6 +51,7 @@ public:
 private:
     std::vector<rebear::Transaction> transactions_;
     std::vector<uint8_t> flashData_;
+    const std::vector<rebear::Patch>* patches_;
     
     // Column indices
     enum Column {
@@ -75,6 +83,9 @@ public:
 
     // Load flash data for displaying actual bytes
     bool loadFlashData(const std::string& filename);
+    
+    // Set patches for displaying patched data
+    void setPatches(const std::vector<rebear::Patch>* patches);
 
 signals:
     // Emitted when user clicks on a transaction

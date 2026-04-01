@@ -13,7 +13,6 @@
 #include <QHBoxLayout>
 #include <map>
 #include "rebear/patch.h"
-#include "rebear/patch_manager.h"
 
 namespace rebear {
 namespace gui {
@@ -27,10 +26,10 @@ class PatchModel : public QAbstractTableModel {
 public:
     explicit PatchModel(QObject* parent = nullptr);
 
-    // Set the patch manager
-    void setPatchManager(rebear::PatchManager* manager);
+    // Set the patches vector
+    void setPatches(std::vector<rebear::Patch>* patches);
 
-    // Refresh from patch manager
+    // Refresh from patches vector
     void refresh();
 
     // Get patch at row
@@ -43,8 +42,8 @@ public:
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 
 private:
-    rebear::PatchManager* patchManager_;
-    std::vector<rebear::Patch> patches_;
+    std::vector<rebear::Patch>* patches_;
+    std::vector<rebear::Patch> patchCache_;
     
     // Column indices
     enum Column {
@@ -97,8 +96,8 @@ class PatchEditor : public QWidget {
 public:
     explicit PatchEditor(QWidget* parent = nullptr);
 
-    // Set the patch manager
-    void setPatchManager(rebear::PatchManager* manager);
+    // Set the patches vector
+    void setPatches(std::vector<rebear::Patch>* patches);
 
     // Refresh the view
     void refresh();
@@ -119,8 +118,6 @@ private slots:
     void onRemoveClicked();
     void onApplyAllClicked();
     void onClearAllClicked();
-    void onLoadClicked();
-    void onSaveClicked();
     void onTableDoubleClicked(const QModelIndex& index);
 
 private:
@@ -134,11 +131,9 @@ private:
     QPushButton* btnRemove_;
     QPushButton* btnApplyAll_;
     QPushButton* btnClearAll_;
-    QPushButton* btnLoad_;
-    QPushButton* btnSave_;
 
     // State
-    rebear::PatchManager* patchManager_;
+    std::vector<rebear::Patch>* patches_;
 };
 
 } // namespace gui

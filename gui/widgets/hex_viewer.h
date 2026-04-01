@@ -13,7 +13,6 @@
 #include <set>
 #include <map>
 #include "rebear/patch.h"
-#include "rebear/patch_manager.h"
 
 namespace rebear {
 namespace gui {
@@ -29,7 +28,7 @@ public:
 
     bool loadFlashData(const std::string& filename);
     void setFlashData(const std::vector<uint8_t>& data);
-    void setPatchManager(rebear::PatchManager* manager);
+    void setPatches(std::vector<rebear::Patch>* patches);
     void gotoAddress(uint32_t address);
     void highlightRange(uint32_t address, uint32_t count);
     void clearHighlights();
@@ -56,9 +55,9 @@ protected:
 
 private:
     void calculateLayout();
+    void drawColumnHeaders(QPainter& painter);
     void drawAddressColumn(QPainter& painter);
     void drawHexColumn(QPainter& painter);
-    void drawAsciiColumn(QPainter& painter);
     
     uint32_t getByteAtPosition(const QPoint& pos) const;
     QRect getByteRect(uint32_t address) const;
@@ -71,7 +70,7 @@ private:
     // Data
     std::vector<uint8_t> flashData_;
     std::map<uint32_t, uint8_t> modifiedBytes_;  // Modified bytes overlay
-    rebear::PatchManager* patchManager_;
+    std::vector<rebear::Patch>* patches_;
     
     // View state
     uint32_t scrollOffset_;
@@ -120,7 +119,7 @@ public:
 
     bool loadFlashData(const std::string& filename);
     void setFlashData(const std::vector<uint8_t>& data);
-    void setPatchManager(rebear::PatchManager* manager);
+    void setPatches(std::vector<rebear::Patch>* patches);
     void gotoAddress(uint32_t address);
     void highlightTransaction(uint32_t address, uint32_t count);
     void refresh();
@@ -131,6 +130,7 @@ signals:
     void patchCreated(const rebear::Patch& patch);
     void applyPatchesRequested();
     void autoApplyPatches();
+    void clearAutoPatches(const std::set<uint8_t>& patchIds);
 
 public slots:
     void onTransactionClicked(uint32_t address);
@@ -168,6 +168,9 @@ private:
     // Auto-apply timer
     QTimer* autoApplyTimer_;
     bool autoApplyEnabled_;
+    
+    // Track IDs of patches created via auto-apply
+    std::set<uint8_t> autoCreatedPatchIds_;
 };
 
 } // namespace gui

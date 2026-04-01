@@ -12,6 +12,9 @@ class QToolBar;
 class QStatusBar;
 class QSplitter;
 class QTextEdit;
+class QLineEdit;
+class QPushButton;
+class QGroupBox;
 
 namespace rebear {
 #if defined(__linux__) && !defined(__APPLE__)
@@ -20,10 +23,10 @@ namespace rebear {
     class BufferReadyMonitor;
 #endif
     class SPIProtocolNetwork;
-    class PatchManager;
     class GPIOControlNetwork;
     class ConnectionDialog;
     struct Transaction;
+    class Patch;
     
     namespace gui {
         class TransactionViewer;
@@ -100,6 +103,7 @@ private slots:
     void onSavePatches();
     void onClearPatches();
     void onDumpPatchBuffer();
+    void onRefreshPatches();
     
     // Button control
     void onButtonPress();
@@ -114,6 +118,10 @@ private slots:
     
     // Settings
     void onSettings();
+    
+    // Address encoder
+    void onEncodeAddress();
+    void onDecodeAddress();
 
 private:
     // UI setup methods
@@ -129,6 +137,8 @@ private:
     void logMessage(const QString& message);
     void saveConnectionSettings();
     void loadConnectionSettings();
+    void refreshPatchesFromFPGA();
+    QWidget* createAddressEncoder();
     
     // Actions
     QAction* connectAction_;
@@ -137,6 +147,7 @@ private:
     QAction* loadPatchesAction_;
     QAction* savePatchesAction_;
     QAction* clearPatchesAction_;
+    QAction* refreshPatchesAction_;
     QAction* dumpPatchBufferAction_;
     QAction* exportAction_;
     QAction* exitAction_;
@@ -168,20 +179,26 @@ private:
     rebear::gui::PatchEditor* patchEditor_;
     rebear::gui::HexViewer* hexViewer_;
     
+    // Address encoder widgets
+    QGroupBox* addressEncoderGroup_;
+    QLineEdit* addressInput_;
+    QPushButton* encodeButton_;
+    QPushButton* decodeButton_;
+    
     // Core library objects (local mode - Linux only)
 #if defined(__linux__) && !defined(__APPLE__)
     std::unique_ptr<rebear::SPIProtocol> spi_;
     std::unique_ptr<rebear::ButtonControl> buttonControl_;
     std::unique_ptr<rebear::BufferReadyMonitor> bufferMonitor_;
 #endif
-    std::unique_ptr<rebear::PatchManager> patchManager_;
+    std::vector<rebear::Patch> patches_;
     
     // Network objects (network mode)
     std::unique_ptr<rebear::SPIProtocolNetwork> spiNetwork_;
     std::unique_ptr<rebear::GPIOControlNetwork> buttonNetwork_;
     std::unique_ptr<rebear::GPIOControlNetwork> bufferMonitorNetwork_;
     
-    // Polling timer for transactions
+    // Polling timers
     QTimer* pollTimer_;
     
     // State

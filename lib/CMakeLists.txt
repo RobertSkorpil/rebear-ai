@@ -5,7 +5,6 @@ set(REBEAR_SOURCES
     src/escape_codec.cpp
     src/transaction.cpp
     src/patch.cpp
-    src/patch_manager.cpp
     src/protocol.cpp
     src/network_client.cpp
     src/spi_protocol_network.cpp
@@ -26,7 +25,6 @@ set(REBEAR_HEADERS
     include/rebear/transaction.h
     include/rebear/patch.h
     include/rebear/spi_protocol.h
-    include/rebear/patch_manager.h
     include/rebear/gpio_control.h
     include/rebear/protocol.h
     include/rebear/network_client.h

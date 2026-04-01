@@ -6,7 +6,7 @@
 #include <type_traits>
 #include "rebear/spi_protocol.h"
 #include "rebear/spi_protocol_network.h"
-#include "rebear/patch_manager.h"
+#include "rebear/patch.h"
 #include "rebear/gpio_control.h"
 #include "rebear/gpio_control_network.h"
 #include "rebear/transaction.h"
@@ -298,8 +298,6 @@ int cmdMonitor(int argc, char* argv[]) {
 // Template implementation for patch command (works with both local and network SPI)
 template<typename SPIType>
 int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* argv[]) {
-    rebear::PatchManager patchMgr;
-    
     // Check if this is local SPI (for MISO capture)
     constexpr bool isLocalSpi = std::is_same<SPIType, rebear::SPIProtocol>::value;
     
@@ -360,10 +358,11 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
             return 1;
         }
         
-        // Add all patches to manager
+        // Add all patches - validate them
         for (const auto& patch : patches) {
-            if (!patchMgr.addPatch(patch)) {
-                std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
+            if (!patch.isValid()) {
+                std::cerr << "Error: Invalid patch data for patch at address 0x" 
+                         << std::hex << patch.address << std::dec << std::endl;
                 return 1;
             }
         }
@@ -412,14 +411,14 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
                 }
             }
         } else {
-            success = patchMgr.applyAllBuffer(spi);
+            success = spi.uploadPatchBuffer(patches);
             if (g_verbose && !isLocalSpi) {
                 std::cout << "\n[Note: MISO data capture not available in network mode]" << std::endl;
             }
         }
         
         if (!success) {
-            std::cerr << "Error: Failed to apply patches: " << patchMgr.getLastError() << std::endl;
+            std::cerr << "Error: Failed to apply patches: " << spi.getLastError() << std::endl;
             spi.close();
             return 1;
         }
@@ -430,16 +429,14 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
         
     } else if (subcommand == "list") {
         std::string format = "text";
-        std::string filename;
-        bool fromFile = false;
         
         for (int i = 3; i < argc; i++) {
             std::string arg = argv[i];
             if (arg == "--format" && i + 1 < argc) {
                 format = argv[++i];
             } else if (arg == "--file" && i + 1 < argc) {
-                filename = argv[++i];
-                fromFile = true;
+                std::cerr << "Error: File I/O has been removed. List command only shows patches currently in FPGA." << std::endl;
+                return 1;
             } else if (arg == "--device" && i + 1 < argc) {
                 // Skip device argument, already handled
                 ++i;
@@ -448,27 +445,19 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
         
         std::vector<rebear::Patch> patches;
         
-        if (fromFile) {
-            // Load from file
-            if (!patchMgr.loadFromFile(filename)) {
-                std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
-                return 1;
-            }
-            patches = patchMgr.getPatches();
-        } else {
-            // Dump from FPGA and parse the buffer
-            std::vector<uint8_t> buffer;
-            if (!spi.dumpPatchBuffer(buffer)) {
-                std::cerr << "Error: Failed to dump patch buffer: " << spi.getLastError() << std::endl;
-                spi.close();
-                return 1;
-            }
-            
-            if (buffer.empty()) {
-                std::cout << "No patches loaded in FPGA" << std::endl;
-                spi.close();
-                return 0;
-            }
+        // Dump from FPGA and parse the buffer
+        std::vector<uint8_t> buffer;
+        if (!spi.dumpPatchBuffer(buffer)) {
+            std::cerr << "Error: Failed to dump patch buffer: " << spi.getLastError() << std::endl;
+            spi.close();
+            return 1;
+        }
+        
+        if (buffer.empty()) {
+            std::cout << "No patches loaded in FPGA" << std::endl;
+            spi.close();
+            return 0;
+        }
             
             // Parse the buffer to extract patches
             // Buffer format: [HEADER_0, HEADER_1, ..., TERMINATOR, DATA_0, DATA_1, ...]
@@ -589,99 +578,43 @@ int cmdPatchImpl(SPIType& spi, const std::string& subcommand, int argc, char* ar
         
     } else if (subcommand == "clear") {
         bool clearAll = false;
-        uint8_t id = 0;
         
         for (int i = 3; i < argc; i++) {
             std::string arg = argv[i];
             if (arg == "--all") {
                 clearAll = true;
             } else if (arg == "--id" && i + 1 < argc) {
-                id = std::stoi(argv[++i]);
+                std::cerr << "Error: Clearing individual patches is not supported. Use --all to clear all patches." << std::endl;
+                return 1;
             } else if (arg == "--device" && i + 1 < argc) {
                 // Skip device argument, already handled
                 ++i;
             }
         }
         
-        if (clearAll) {
-            if (!patchMgr.clearAll(spi)) {
-                std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
-                spi.close();
-                return 1;
-            }
-            std::cout << "All patches cleared" << std::endl;
-        } else {
-            if (!patchMgr.removePatch(id)) {
-                std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
-                spi.close();
-                return 1;
-            }
-            
-            if (!patchMgr.applyAll(spi)) {
-                std::cerr << "Error: Failed to update FPGA: " << patchMgr.getLastError() << std::endl;
-                spi.close();
-                return 1;
-            }
-            
-            std::cout << "Patch " << static_cast<int>(id) << " cleared" << std::endl;
+        if (!clearAll) {
+            std::cerr << "Error: --all flag is required to clear patches" << std::endl;
+            return 1;
         }
+        
+        if (!spi.clearPatches()) {
+            std::cerr << "Error: " << spi.getLastError() << std::endl;
+            spi.close();
+            return 1;
+        }
+        std::cout << "All patches cleared" << std::endl;
         
         spi.close();
         
     } else if (subcommand == "load") {
-        std::string filename;
-        
-        for (int i = 3; i < argc; i++) {
-            std::string arg = argv[i];
-            if (arg == "--file" && i + 1 < argc) {
-                filename = argv[++i];
-            } else if (arg == "--device" && i + 1 < argc) {
-                // Skip device argument, already handled
-                ++i;
-            }
-        }
-        
-        if (filename.empty()) {
-            std::cerr << "Error: --file required" << std::endl;
-            return 1;
-        }
-        
-        if (!patchMgr.loadFromFile(filename)) {
-            std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
-            return 1;
-        }
-        
-        if (!patchMgr.applyAll(spi)) {
-            std::cerr << "Error: Failed to apply patches: " << patchMgr.getLastError() << std::endl;
-            spi.close();
-            return 1;
-        }
-        
-        std::cout << "Loaded and applied " << patchMgr.count() << " patches from " << filename << std::endl;
+        std::cerr << "Error: Patch file I/O has been removed. Use 'patch set' to create patches." << std::endl;
+        return 1;
         
         spi.close();
         
     } else if (subcommand == "save") {
-        std::string filename;
-        
-        for (int i = 3; i < argc; i++) {
-            std::string arg = argv[i];
-            if (arg == "--file" && i + 1 < argc) {
-                filename = argv[++i];
-            }
-        }
-        
-        if (filename.empty()) {
-            std::cerr << "Error: --file required" << std::endl;
-            return 1;
-        }
-        
-        if (!patchMgr.saveToFile(filename)) {
-            std::cerr << "Error: " << patchMgr.getLastError() << std::endl;
-            return 1;
-        }
-        
-        std::cout << "Saved " << patchMgr.count() << " patches to " << filename << std::endl;
+        std::cerr << "Error: Patch file I/O has been removed." << std::endl;
+        return 1;
         
     } else if (subcommand == "dump") {
         std::string format = "hex";

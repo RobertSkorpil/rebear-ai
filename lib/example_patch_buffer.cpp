@@ -7,7 +7,7 @@
  */
 
 #include <rebear/spi_protocol.h>
-#include <rebear/patch_manager.h>
+#include <rebear/patch.h>
 #include <iostream>
 #include <vector>
 
@@ -64,29 +64,28 @@ void example_direct_upload() {
     spi.close();
 }
 
-// Example 2: Using PatchManager for convenience
-void example_patch_manager() {
-    std::cout << "\n=== Example 2: Using PatchManager ===" << std::endl;
+// Example 2: Using vector for multiple patches
+void example_vector_patches() {
+    std::cout << "\n=== Example 2: Using Vector for Multiple Patches ===" << std::endl;
     
-    // Create patch manager
-    PatchManager manager;
+    // Create patches
+    std::vector<Patch> patches;
     
-    // Add patches to manager
     Patch p1;
     p1.id = 0;
     p1.address = 0x001000;
     p1.data = {0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE};
     p1.enabled = true;
-    manager.addPatch(p1);
+    patches.push_back(p1);
     
     Patch p2;
     p2.id = 1;
     p2.address = 0x002000;
     p2.data = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
     p2.enabled = true;
-    manager.addPatch(p2);
+    patches.push_back(p2);
     
-    std::cout << "Added " << manager.count() << " patches to manager" << std::endl;
+    std::cout << "Created " << patches.size() << " patches" << std::endl;
     
     // Open SPI
     SPIProtocol spi;

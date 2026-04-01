@@ -1,4 +1,5 @@
 #include "transaction_viewer.h"
+#include "rebear/patch.h"
 #include <QHeaderView>
 #include <QLabel>
 #include <QGroupBox>
@@ -16,6 +17,7 @@ namespace gui {
 
 TransactionModel::TransactionModel(QObject* parent)
     : QAbstractTableModel(parent)
+    , patches_(nullptr)
 {
 }
 
@@ -56,6 +58,14 @@ bool TransactionModel::loadFlashData(const std::string& filename) {
     return true;
 }
 
+void TransactionModel::setPatches(const std::vector<rebear::Patch>* patches) {
+    patches_ = patches;
+    // Refresh the data column to show patched data
+    if (rowCount() > 0) {
+        emit dataChanged(index(0, COL_DATA), index(rowCount() - 1, COL_DATA));
+    }
+}
+
 int TransactionModel::rowCount(const QModelIndex& parent) const {
     if (parent.isValid()) {
         return 0;
@@ -91,15 +101,49 @@ QVariant TransactionModel::data(const QModelIndex& index, int role) const {
                 return QString::fromStdString(oss.str());
             }
             case COL_COUNT: {
-                if (trans.count == 0xFFFFFF) {
-                    return QString("PATCHED");
-                }
                 std::ostringstream oss;
                 oss << trans.count << " bytes";
                 return QString::fromStdString(oss.str());
             }
             case COL_DATA: {
-                // Show first 16 bytes of actual data from flash.bin
+                // Check if this transaction overlaps with any active patch
+                const rebear::Patch* matchingPatch = nullptr;
+                if (patches_ != nullptr) {
+                    for (const auto& patch : *patches_) {
+                        if (patch.enabled && !patch.data.empty()) {
+                            // Check if transaction address falls within patch range
+                            uint32_t patchEnd = patch.address + patch.data.size();
+                            if (trans.address >= patch.address && trans.address < patchEnd) {
+                                matchingPatch = &patch;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // If we have a matching patch, show patched data
+                if (matchingPatch != nullptr) {
+                    std::ostringstream oss;
+                    // Calculate offset into patch data
+                    uint32_t offset = trans.address - matchingPatch->address;
+                    size_t remainingPatchBytes = matchingPatch->data.size() - offset;
+                    size_t bytesToShow = std::min(static_cast<size_t>(16), remainingPatchBytes);
+                    
+                    for (size_t i = 0; i < bytesToShow; ++i) {
+                        if (i > 0) oss << " ";
+                        oss << std::hex << std::setw(2) << std::setfill('0')
+                            << std::uppercase << static_cast<int>(matchingPatch->data[offset + i]);
+                    }
+                    
+                    if (remainingPatchBytes > 16 || trans.count > bytesToShow) {
+                        oss << "...";
+                    }
+                    oss << " [PATCHED]";
+                    
+                    return QString::fromStdString(oss.str());
+                }
+                
+                // Show original data from flash.bin
                 if (flashData_.empty() || trans.address >= flashData_.size()) {
                     return QString("(no data)");
                 }
@@ -136,8 +180,16 @@ QVariant TransactionModel::data(const QModelIndex& index, int role) const {
         }
     } else if (role == Qt::ForegroundRole) {
         // Highlight patched transactions
-        if (trans.count == 0xFFFFFF) {
-            return QColor(255, 0, 0);  // Red text for patched
+        if (patches_ != nullptr) {
+            for (const auto& patch : *patches_) {
+                if (patch.enabled && !patch.data.empty()) {
+                    // Check if transaction address falls within patch range
+                    uint32_t patchEnd = patch.address + patch.data.size();
+                    if (trans.address >= patch.address && trans.address < patchEnd) {
+                        return QColor(255, 0, 0);  // Red text for patched
+                    }
+                }
+            }
         }
     }
 
@@ -249,6 +301,10 @@ void TransactionViewer::setAutoScroll(bool enabled) {
 
 bool TransactionViewer::loadFlashData(const std::string& filename) {
     return model_->loadFlashData(filename);
+}
+
+void TransactionViewer::setPatches(const std::vector<rebear::Patch>* patches) {
+    model_->setPatches(patches);
 }
 
 void TransactionViewer::onClearClicked() {

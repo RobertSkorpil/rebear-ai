@@ -75,8 +75,8 @@ bool Transaction::isValid() const {
         return false;
     }
     
-    // Count should be reasonable (< 1MB) OR be the special patched value
-    if (count >= 1048576 && count != 0xFFFFFF) {
+    // Count should be reasonable (< 1MB)
+    if (count >= 1048576) {
         return false;
     }
     
@@ -93,12 +93,6 @@ bool Transaction::isDummy() const {
     //   count = 0xFFFFFF (invalid count)
     //   timestamp = 0xFFFF (max timestamp, but valid)
     return (address == 0xFFFFFF) && (count == 0xFFFFFF) && (timestamp == 0xFFFF);
-}
-
-bool Transaction::isPatched() const {
-    // When FPGA actively patches a transaction, it doesn't count the data
-    // and sets count to 0xFFFFFF to indicate patch was applied
-    return (count == 0xFFFFFF);
 }
 
 } // namespace rebear

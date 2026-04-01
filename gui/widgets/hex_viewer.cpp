@@ -25,7 +25,7 @@ namespace gui {
 
 HexDisplay::HexDisplay(QWidget* parent)
     : QWidget(parent)
-    , patchManager_(nullptr)
+    , patches_(nullptr)
     , scrollOffset_(0)
     , bytesPerRow_(16)
     , visibleRows_(0)
@@ -74,8 +74,8 @@ void HexDisplay::setFlashData(const std::vector<uint8_t>& data) {
     update();
 }
 
-void HexDisplay::setPatchManager(rebear::PatchManager* manager) {
-    patchManager_ = manager;
+void HexDisplay::setPatches(std::vector<rebear::Patch>* patches) {
+    patches_ = patches;
     update();
 }
 
@@ -121,10 +121,23 @@ void HexDisplay::setByteValue(uint32_t address, uint8_t value) {
 uint8_t HexDisplay::getByteValue(uint32_t address) const {
     if (address >= flashData_.size()) return 0xFF;
     
+    // First check user modifications (highest priority)
     auto it = modifiedBytes_.find(address);
     if (it != modifiedBytes_.end()) {
         return it->second;
     }
+    
+    // Then check patches
+    if (patches_) {
+        for (const auto& patch : *patches_) {
+            if (patch.enabled && address >= patch.address && 
+                address < patch.address + patch.data.size()) {
+                return patch.data[address - patch.address];
+            }
+        }
+    }
+    
+    // Return original flash data
     return flashData_[address];
 }
 
@@ -147,9 +160,9 @@ void HexDisplay::calculateLayout() {
     
     addressColumnWidth_ = charWidth_ * 10;
     hexColumnWidth_ = charWidth_ * (bytesPerRow_ * 3 + 2);
-    asciiColumnWidth_ = charWidth_ * (bytesPerRow_ + 2);
+    asciiColumnWidth_ = 0;  // No longer using ASCII column
     
-    visibleRows_ = (height() - 20) / rowHeight_;
+    visibleRows_ = (height() - 30) / rowHeight_;  // Extra space for header row
 }
 
 void HexDisplay::paintEvent(QPaintEvent*) {
@@ -161,9 +174,9 @@ void HexDisplay::paintEvent(QPaintEvent*) {
         return;
     }
     
+    drawColumnHeaders(painter);
     drawAddressColumn(painter);
     drawHexColumn(painter);
-    drawAsciiColumn(painter);
 }
 
 void HexDisplay::drawAddressColumn(QPainter& painter) {
@@ -173,7 +186,7 @@ void HexDisplay::drawAddressColumn(QPainter& painter) {
         uint32_t address = scrollOffset_ + (row * bytesPerRow_);
         if (address >= flashData_.size()) break;
         
-        int y = 10 + row * rowHeight_;
+        int y = 30 + row * rowHeight_;  // Start after header row
         
         std::ostringstream oss;
         oss << std::hex << std::setw(8) << std::setfill('0') 
@@ -183,14 +196,39 @@ void HexDisplay::drawAddressColumn(QPainter& painter) {
     }
 }
 
+void HexDisplay::drawColumnHeaders(QPainter& painter) {
+    int hexStartX = addressColumnWidth_ + 10;
+    
+    painter.setPen(Qt::black);
+    QFont headerFont = font();
+    headerFont.setBold(true);
+    painter.setFont(headerFont);
+    
+    // Draw header background
+    QRect headerRect(0, 0, width(), 25);
+    painter.fillRect(headerRect, QColor(240, 240, 240));
+    
+    // Draw "Offset" label above address column
+    painter.drawText(5, 18, "Offset");
+    
+    // Draw column headers (0-F for last nibble)
+    for (uint32_t col = 0; col < bytesPerRow_; ++col) {
+        int x = hexStartX + col * charWidth_ * 3;
+        char nibble = (col < 10) ? ('0' + col) : ('A' + col - 10);
+        painter.drawText(x + charWidth_ / 2, 18, QString(QChar(nibble)));
+    }
+    
+    // Restore normal font
+    painter.setFont(font());
+}
+
 void HexDisplay::drawHexColumn(QPainter& painter) {
     int hexStartX = addressColumnWidth_ + 10;
     
-    // Get active patches from patch manager
+    // Get active patches from patch vector
     std::map<uint32_t, rebear::Patch> patchMap;
-    if (patchManager_) {
-        auto patches = patchManager_->getPatches();
-        for (const auto& patch : patches) {
+    if (patches_) {
+        for (const auto& patch : *patches_) {
             if (patch.enabled && patch.address < flashData_.size()) {
                 size_t patchLen = std::min(patch.data.size(), 
                                           size_t(flashData_.size() - patch.address));
@@ -205,7 +243,7 @@ void HexDisplay::drawHexColumn(QPainter& painter) {
         uint32_t rowAddress = scrollOffset_ + (row * bytesPerRow_);
         if (rowAddress >= flashData_.size()) break;
         
-        int y = 10 + row * rowHeight_;
+        int y = 30 + row * rowHeight_;  // Start after header row
         
         for (uint32_t col = 0; col < bytesPerRow_; ++col) {
             uint32_t address = rowAddress + col;
@@ -284,33 +322,6 @@ void HexDisplay::drawHexColumn(QPainter& painter) {
                 painter.drawText(x, y + charHeight_, QString::fromStdString(oss.str()));
             }
         }
-    }
-}
-
-void HexDisplay::drawAsciiColumn(QPainter& painter) {
-    int asciiStartX = addressColumnWidth_ + hexColumnWidth_ + 20;
-    painter.setPen(Qt::darkGray);
-    
-    for (uint32_t row = 0; row < visibleRows_; ++row) {
-        uint32_t rowAddress = scrollOffset_ + (row * bytesPerRow_);
-        if (rowAddress >= flashData_.size()) break;
-        
-        int y = 10 + row * rowHeight_;
-        painter.drawText(asciiStartX, y + charHeight_, "|");
-        
-        for (uint32_t col = 0; col < bytesPerRow_; ++col) {
-            uint32_t address = rowAddress + col;
-            if (address >= flashData_.size()) break;
-            
-            uint8_t byte = getByteValue(address);
-            char c = (byte >= 32 && byte < 127) ? byte : '.';
-            
-            int x = asciiStartX + charWidth_ + col * charWidth_;
-            painter.drawText(x, y + charHeight_, QString(QChar(c)));
-        }
-        
-        painter.drawText(asciiStartX + charWidth_ * (bytesPerRow_ + 1), 
-                        y + charHeight_, "|");
     }
 }
 
@@ -473,7 +484,8 @@ uint32_t HexDisplay::getByteAtPosition(const QPoint& pos) const {
         return 0xFFFFFFFF;
     }
     
-    int row = (pos.y() - 10) / rowHeight_;
+    // Account for header row (starts at y=30)
+    int row = (pos.y() - 30) / rowHeight_;
     if (row < 0 || row >= static_cast<int>(visibleRows_)) {
         return 0xFFFFFFFF;
     }
@@ -499,7 +511,7 @@ QRect HexDisplay::getByteRect(uint32_t address) const {
     
     int hexStartX = addressColumnWidth_ + 10;
     int x = hexStartX + col * charWidth_ * 3;
-    int y = 10 + row * rowHeight_;
+    int y = 30 + row * rowHeight_;  // Account for header row
     
     return QRect(x, y, charWidth_ * 2, charHeight_);
 }
@@ -545,9 +557,8 @@ void HexDisplay::showContextMenu(const QPoint& globalPos, uint32_t address) {
     
     // Check if byte is patched
     bool isPatched = false;
-    if (patchManager_) {
-        auto patches = patchManager_->getPatches();
-        for (const auto& patch : patches) {
+    if (patches_) {
+        for (const auto& patch : *patches_) {
             if (patch.enabled && address >= patch.address && 
                 address < patch.address + patch.data.size()) {
                 isPatched = true;
@@ -707,8 +718,8 @@ void HexViewer::setAutoApplyEnabled(bool enabled) {
     }
 }
 
-void HexViewer::setPatchManager(rebear::PatchManager* manager) {
-    hexDisplay_->setPatchManager(manager);
+void HexViewer::setPatches(std::vector<rebear::Patch>* patches) {
+    hexDisplay_->setPatches(patches);
 }
 
 void HexViewer::gotoAddress(uint32_t address) {
@@ -957,13 +968,28 @@ void HexViewer::onGenerateCommand() {
 
 void HexViewer::applyModificationsAutomatically() {
     auto patches = calculateOptimizedPatches();
-    if (patches.empty()) return;
+    if (patches.empty()) {
+        // Clear auto-created patches if no modifications remain
+        if (!autoCreatedPatchIds_.empty()) {
+            emit clearAutoPatches(autoCreatedPatchIds_);
+            autoCreatedPatchIds_.clear();
+        }
+        return;
+    }
     
     if (patches.size() > 8) {
         return;
     }
     
+    // Clear previous auto-created patches before adding new ones
+    if (!autoCreatedPatchIds_.empty()) {
+        emit clearAutoPatches(autoCreatedPatchIds_);
+        autoCreatedPatchIds_.clear();
+    }
+    
+    // Track the IDs of patches we're about to create
     for (const auto& patch : patches) {
+        autoCreatedPatchIds_.insert(patch.id);
         emit patchCreated(patch);
     }
     

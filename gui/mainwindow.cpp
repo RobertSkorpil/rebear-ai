@@ -8,7 +8,7 @@
 #include "rebear/gpio_control.h"
 #endif
 #include "rebear/spi_protocol_network.h"
-#include "rebear/patch_manager.h"
+#include "rebear/patch.h"
 #include "rebear/gpio_control_network.h"
 #include "rebear/transaction.h"
 
@@ -28,8 +28,15 @@
 #include <QInputDialog>
 #include <QTimer>
 #include <QDateTime>
+#include <algorithm>
+#include <set>
 #include <QSettings>
 #include <QThread>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QGroupBox>
+#include <QRegularExpression>
+#include <QRegularExpressionValidator>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -45,10 +52,7 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle("Rebear - Teddy Bear Reverse Engineering");
     resize(1200, 800);
     
-    // Initialize patch manager (always needed)
-    patchManager_ = std::make_unique<rebear::PatchManager>();
-    
-    // Create polling timer
+    // Create polling timers
     pollTimer_ = new QTimer(this);
     connect(pollTimer_, &QTimer::timeout, this, &MainWindow::onPollTransactions);
     
@@ -134,6 +138,11 @@ void MainWindow::createActions()
     clearPatchesAction_->setStatusTip(tr("Clear all patches"));
     connect(clearPatchesAction_, &QAction::triggered, this, &MainWindow::onClearPatches);
     
+    refreshPatchesAction_ = new QAction(tr("&Refresh Patches"), this);
+    refreshPatchesAction_->setShortcut(QKeySequence(tr("Ctrl+R")));
+    refreshPatchesAction_->setStatusTip(tr("Refresh patches from FPGA"));
+    connect(refreshPatchesAction_, &QAction::triggered, this, &MainWindow::onRefreshPatches);
+    
     dumpPatchBufferAction_ = new QAction(tr("&Dump Patch Buffer"), this);
     dumpPatchBufferAction_->setStatusTip(tr("Dump patch buffer content from FPGA"));
     connect(dumpPatchBufferAction_, &QAction::triggered, this, &MainWindow::onDumpPatchBuffer);
@@ -182,6 +191,7 @@ void MainWindow::createMenus()
     toolsMenu_->addAction(loadPatchesAction_);
     toolsMenu_->addAction(savePatchesAction_);
     toolsMenu_->addAction(clearPatchesAction_);
+    toolsMenu_->addAction(refreshPatchesAction_);
     toolsMenu_->addAction(dumpPatchBufferAction_);
     toolsMenu_->addSeparator();
     toolsMenu_->addAction(buttonPressAction_);
@@ -202,6 +212,8 @@ void MainWindow::createToolBar()
     mainToolBar_->addAction(disconnectAction_);
     mainToolBar_->addSeparator();
     mainToolBar_->addAction(clearTransactionsAction_);
+    mainToolBar_->addSeparator();
+    mainToolBar_->addAction(refreshPatchesAction_);
     mainToolBar_->addSeparator();
     mainToolBar_->addAction(buttonClickAction_);
     mainToolBar_->addSeparator();
@@ -245,10 +257,11 @@ void MainWindow::createCentralWidget()
     
     // Create transaction viewer
     transactionViewer_ = new rebear::gui::TransactionViewer(this);
+    transactionViewer_->setPatches(&patches_);
     
     // Create patch editor
     patchEditor_ = new rebear::gui::PatchEditor(this);
-    patchEditor_->setPatchManager(patchManager_.get());
+    patchEditor_->setPatches(&patches_);
     
     // Add to left layout (50/50 split vertically)
     leftLayout->addWidget(transactionViewer_);
@@ -256,7 +269,7 @@ void MainWindow::createCentralWidget()
     
     // Create hex viewer
     hexViewer_ = new rebear::gui::HexViewer(this);
-    hexViewer_->setPatchManager(patchManager_.get());
+    hexViewer_->setPatches(&patches_);
     
     // Add to horizontal layout (40% left, 60% hex viewer)
     topLayout->addWidget(leftWidget, 2);
@@ -267,9 +280,19 @@ void MainWindow::createCentralWidget()
     logWidget_->setReadOnly(true);
     logWidget_->setMaximumHeight(200);
     
+    // Create address encoder
+    QWidget* encoderWidget = createAddressEncoder();
+    
+    // Create bottom area with log and encoder side by side
+    QWidget* bottomWidget = new QWidget(this);
+    QHBoxLayout* bottomLayout = new QHBoxLayout(bottomWidget);
+    bottomLayout->setContentsMargins(0, 0, 0, 0);
+    bottomLayout->addWidget(logWidget_, 3);
+    bottomLayout->addWidget(encoderWidget, 1);
+    
     // Add widgets to main splitter
     mainSplitter_->addWidget(topWidget);
-    mainSplitter_->addWidget(logWidget_);
+    mainSplitter_->addWidget(bottomWidget);
     
     // Set splitter sizes (80% top, 20% bottom)
     mainSplitter_->setStretchFactor(0, 4);
@@ -283,18 +306,19 @@ void MainWindow::createCentralWidget()
     connect(transactionViewer_, &rebear::gui::TransactionViewer::transactionClicked,
             hexViewer_, &rebear::gui::HexViewer::onTransactionClicked);
     
-    // Connect hex viewer patch creation to patch manager
+    // Connect hex viewer patch creation to patch list
     connect(hexViewer_, &rebear::gui::HexViewer::patchCreated,
             this, [this](const rebear::Patch& patch) {
-                if (patchManager_->addPatch(patch)) {
+                if (patch.isValid()) {
+                    patches_.push_back(patch);
                     patchEditor_->refresh();
                     hexViewer_->refresh();
+                    transactionViewer_->setPatches(&patches_);
                     logMessage(QString("Created patch ID %1 at address 0x%2")
                               .arg(patch.id)
                               .arg(patch.address, 6, 16, QChar('0')).toUpper());
                 } else {
-                    QMessageBox::warning(this, "Patch Error",
-                        QString::fromStdString(patchManager_->getLastError()));
+                    QMessageBox::warning(this, "Patch Error", "Invalid patch data");
                 }
             });
     
@@ -303,20 +327,43 @@ void MainWindow::createCentralWidget()
                 if (!isConnected_) return;
                 bool success = false;
                 if (useNetwork_) {
-                    success = patchManager_->applyAllBuffer(*spiNetwork_);
+                    success = spiNetwork_->uploadPatchBuffer(patches_);
                 } else {
 #if defined(__linux__) && !defined(__APPLE__)
-                    success = patchManager_->applyAllBuffer(*spi_);
+                    success = spi_->uploadPatchBuffer(patches_);
 #endif
                 }
                 if (success) {
                     updateStatusBar("Patches auto-applied");
                     logMessage("Patches automatically applied to FPGA");
                     hexViewer_->refresh();
+                    // Refresh from FPGA to confirm
+                    refreshPatchesFromFPGA();
                 } else {
-                    logMessage(QString("Auto-apply failed: %1")
-                              .arg(QString::fromStdString(patchManager_->getLastError())));
+                    QString errorMsg = useNetwork_ ? 
+                        QString::fromStdString(spiNetwork_->getLastError()) :
+#if defined(__linux__) && !defined(__APPLE__)
+                        QString::fromStdString(spi_->getLastError());
+#else
+                        QString("Not supported");
+#endif
+                    logMessage(QString("Auto-apply failed: %1").arg(errorMsg));
                 }
+            });
+    
+    connect(hexViewer_, &rebear::gui::HexViewer::clearAutoPatches,
+            this, [this](const std::set<uint8_t>& patchIds) {
+                // Remove patches with matching IDs
+                patches_.erase(
+                    std::remove_if(patches_.begin(), patches_.end(),
+                        [&patchIds](const rebear::Patch& p) {
+                            return patchIds.find(p.id) != patchIds.end();
+                        }),
+                    patches_.end()
+                );
+                patchEditor_->refresh();
+                hexViewer_->refresh();
+                transactionViewer_->setPatches(&patches_);
             });
     
     connect(patchEditor_, &rebear::gui::PatchEditor::applyAllRequested,
@@ -324,19 +371,27 @@ void MainWindow::createCentralWidget()
                 if (!isConnected_) return;
                 bool success = false;
                 if (useNetwork_) {
-                    success = patchManager_->applyAllBuffer(*spiNetwork_);
+                    success = spiNetwork_->uploadPatchBuffer(patches_);
                 } else {
 #if defined(__linux__) && !defined(__APPLE__)
-                    success = patchManager_->applyAllBuffer(*spi_);
+                    success = spi_->uploadPatchBuffer(patches_);
 #endif
                 }
                 if (success) {
                     updateStatusBar("All patches applied");
                     logMessage("All patches applied to FPGA");
                     hexViewer_->refresh();
+                    // Refresh from FPGA to confirm
+                    refreshPatchesFromFPGA();
                 } else {
-                    QMessageBox::warning(this, "Apply Failed",
-                        QString::fromStdString(patchManager_->getLastError()));
+                    QString errorMsg = useNetwork_ ? 
+                        QString::fromStdString(spiNetwork_->getLastError()) :
+#if defined(__linux__) && !defined(__APPLE__)
+                        QString::fromStdString(spi_->getLastError());
+#else
+                        QString("Not supported");
+#endif
+                    QMessageBox::warning(this, "Apply Failed", errorMsg);
                 }
             });
     
@@ -345,6 +400,11 @@ void MainWindow::createCentralWidget()
     
     connect(patchEditor_, &rebear::gui::PatchEditor::patchesChanged,
             hexViewer_, &rebear::gui::HexViewer::refresh);
+    
+    connect(patchEditor_, &rebear::gui::PatchEditor::patchesChanged,
+            this, [this]() {
+                transactionViewer_->setPatches(&patches_);
+            });
     
     // Auto-load flash.bin if it exists
     if (hexViewer_->loadFlashData("data/flash.bin")) {
@@ -368,6 +428,7 @@ void MainWindow::updateConnectionState(bool connected)
     loadPatchesAction_->setEnabled(connected);
     savePatchesAction_->setEnabled(connected);
     clearPatchesAction_->setEnabled(connected);
+    refreshPatchesAction_->setEnabled(connected);
     dumpPatchBufferAction_->setEnabled(connected);
     buttonPressAction_->setEnabled(connected);
     buttonReleaseAction_->setEnabled(connected);
@@ -510,8 +571,11 @@ void MainWindow::onConnect()
         saveConnectionSettings();
     }
     
-    // Start polling timer (100ms interval)
-    pollTimer_->start(100);
+    // Start polling timers
+    pollTimer_->start(100); // 100ms for transactions
+    
+    // Immediately fetch current patches from FPGA
+    refreshPatchesFromFPGA();
     
     updateConnectionState(true);
     updateStatusBar("Connected");
@@ -629,10 +693,9 @@ void MainWindow::onPollTransactions()
             transactionCountLabel_->setText(QString("Transactions: %1").arg(transactionCount_));
             
             // Log transaction
-            QString countStr = (trans->count == 0xFFFFFF) ? "PATCHED" : QString::number(trans->count);
             logMessage(QString("Transaction: Addr=0x%1 Count=%2 Time=%3ms")
                       .arg(trans->address, 6, 16, QChar('0'))
-                      .arg(countStr)
+                      .arg(trans->count)
                       .arg(trans->timestamp));
             
             emit transactionReceived(*trans);
@@ -645,65 +708,14 @@ void MainWindow::onPollTransactions()
 
 void MainWindow::onLoadPatches()
 {
-    if (!isConnected_) return;
-    
-    QString filename = QFileDialog::getOpenFileName(this,
-                                                   tr("Load Patches"),
-                                                   "",
-                                                   tr("JSON Files (*.json);;All Files (*)"));
-    
-    if (!filename.isEmpty()) {
-        if (patchManager_->loadFromFile(filename.toStdString())) {
-            // Refresh patch editor
-            patchEditor_->refresh();
-            
-            // Apply all patches to FPGA
-            bool applied = false;
-            if (useNetwork_) {
-                applied = patchManager_->applyAllBuffer(*spiNetwork_);
-            } else {
-#if defined(__linux__) && !defined(__APPLE__)
-                applied = patchManager_->applyAllBuffer(*spi_);
-#endif
-            }
-            
-            if (applied) {
-                updateStatusBar(QString("Loaded %1 patches").arg(patchManager_->count()));
-                logMessage(QString("Loaded and applied %1 patches from %2")
-                          .arg(patchManager_->count())
-                          .arg(filename));
-            } else {
-                QMessageBox::warning(this, "Apply Failed",
-                                   QString("Patches loaded but failed to apply:\n%1")
-                                   .arg(QString::fromStdString(patchManager_->getLastError())));
-            }
-        } else {
-            QMessageBox::critical(this, "Load Failed",
-                                QString("Failed to load patches:\n%1")
-                                .arg(QString::fromStdString(patchManager_->getLastError())));
-        }
-    }
+    QMessageBox::information(this, "Not Implemented", 
+        "Patch file I/O has been removed. Create patches interactively in the hex viewer.");
 }
 
 void MainWindow::onSavePatches()
 {
-    QString filename = QFileDialog::getSaveFileName(this,
-                                                   tr("Save Patches"),
-                                                   "",
-                                                   tr("JSON Files (*.json);;All Files (*)"));
-    
-    if (!filename.isEmpty()) {
-        if (patchManager_->saveToFile(filename.toStdString())) {
-            updateStatusBar("Patches saved");
-            logMessage(QString("Saved %1 patches to %2")
-                      .arg(patchManager_->count())
-                      .arg(filename));
-        } else {
-            QMessageBox::critical(this, "Save Failed",
-                                QString("Failed to save patches:\n%1")
-                                .arg(QString::fromStdString(patchManager_->getLastError())));
-        }
-    }
+    QMessageBox::information(this, "Not Implemented", 
+        "Patch file I/O has been removed. Patches exist only in memory during the session.");
 }
 
 void MainWindow::onClearPatches()
@@ -716,22 +728,33 @@ void MainWindow::onClearPatches()
                                                              QMessageBox::Yes | QMessageBox::No);
     
     if (reply == QMessageBox::Yes) {
+        patches_.clear();
+        patchEditor_->refresh();
+        
         bool cleared = false;
         if (useNetwork_) {
-            cleared = patchManager_->clearAll(*spiNetwork_);
+            cleared = spiNetwork_->clearPatches();
         } else {
 #if defined(__linux__) && !defined(__APPLE__)
-            cleared = patchManager_->clearAll(*spi_);
+            cleared = spi_->clearPatches();
 #endif
         }
         
         if (cleared) {
             updateStatusBar("All patches cleared");
-            logMessage("All patches cleared from FPGA");
+            logMessage("All patches cleared from FPGA and local memory");
+            // Refresh from FPGA to confirm
+            refreshPatchesFromFPGA();
         } else {
+            QString errorMsg = useNetwork_ ? 
+                QString::fromStdString(spiNetwork_->getLastError()) :
+#if defined(__linux__) && !defined(__APPLE__)
+                QString::fromStdString(spi_->getLastError());
+#else
+                QString("Not supported");
+#endif
             QMessageBox::warning(this, "Clear Failed",
-                               QString("Failed to clear patches:\n%1")
-                               .arg(QString::fromStdString(patchManager_->getLastError())));
+                               QString("Failed to clear patches:\n%1").arg(errorMsg));
         }
     }
 }
@@ -944,4 +967,278 @@ void MainWindow::loadConnectionSettings()
     remotePort_ = settings.value("connection/port", 9876).toUInt();
     currentDevice_ = settings.value("connection/device", "/dev/spidev0.0").toString();
     currentSpeed_ = settings.value("connection/speed", 100000).toUInt();
+}
+
+void MainWindow::refreshPatchesFromFPGA()
+{
+    if (!isConnected_) {
+        return;
+    }
+    
+    // Dump patch buffer from FPGA
+    std::vector<uint8_t> buffer;
+    bool success = false;
+    
+    if (useNetwork_) {
+        success = spiNetwork_ && spiNetwork_->dumpPatchBuffer(buffer);
+    } else {
+#if defined(__linux__) && !defined(__APPLE__)
+        success = spi_ && spi_->dumpPatchBuffer(buffer);
+#endif
+    }
+    
+    if (!success) {
+        logMessage("Warning: Failed to refresh patches from FPGA");
+        return;
+    }
+    
+    if (buffer.empty()) {
+        // No patches in FPGA - clear local list
+        if (!patches_.empty()) {
+            patches_.clear();
+            patchEditor_->refresh();
+            hexViewer_->refresh();
+            logMessage("Patches cleared (FPGA has no patches)");
+        }
+        return;
+    }
+    
+    // Parse the buffer to extract patches
+    std::vector<rebear::Patch> newPatches;
+    size_t offset = 0;
+    uint8_t patchId = 0;
+    
+    // Parse headers
+    while (offset < buffer.size()) {
+        // Read STORED byte
+        uint8_t stored = buffer[offset++];
+        
+        // Check for terminator
+        if (stored == 0x00 && offset >= buffer.size()) {
+            break;
+        }
+        
+        if (offset + 7 > buffer.size()) {
+            break;
+        }
+        
+        // Parse patch header (8 bytes: STORED + ADDRESS(3) + LENGTH(2) + OFFSET(2))
+        uint32_t address = (static_cast<uint32_t>(buffer[offset]) << 16) |
+                          (static_cast<uint32_t>(buffer[offset + 1]) << 8) |
+                          static_cast<uint32_t>(buffer[offset + 2]);
+        offset += 3;
+        
+        uint16_t length = (static_cast<uint16_t>(buffer[offset]) << 8) |
+                         static_cast<uint16_t>(buffer[offset + 1]);
+        offset += 2;
+        
+        uint16_t dataOffset = (static_cast<uint16_t>(buffer[offset]) << 8) |
+                             static_cast<uint16_t>(buffer[offset + 1]);
+        offset += 2;
+        
+        // Check for terminator
+        if (stored == 0x00) {
+            break;
+        }
+        
+        // Validate data offset and length
+        if (dataOffset + length > buffer.size()) {
+            logMessage(QString("Warning: Invalid patch data at offset %1").arg(offset));
+            break;
+        }
+        
+        // Extract patch
+        rebear::Patch patch;
+        patch.id = patchId++;
+        patch.address = address;
+        patch.enabled = (stored == 0x80);
+        patch.data.assign(buffer.begin() + dataOffset, 
+                         buffer.begin() + dataOffset + length);
+        
+        newPatches.push_back(patch);
+    }
+    
+    // Update local patch list if changed
+    if (patches_ != newPatches) {
+        patches_ = newPatches;
+        patchEditor_->refresh();
+        hexViewer_->refresh();
+        logMessage(QString("Synced %1 patch(es) from FPGA").arg(patches_.size()));
+    }
+}
+
+void MainWindow::onRefreshPatches()
+{
+    if (!isConnected_) return;
+    
+    logMessage("Manually refreshing patches from FPGA...");
+    refreshPatchesFromFPGA();
+    updateStatusBar("Patches refreshed from FPGA");
+}
+
+QWidget* MainWindow::createAddressEncoder()
+{
+    addressEncoderGroup_ = new QGroupBox("Address Encoder", this);
+    QVBoxLayout* encoderLayout = new QVBoxLayout(addressEncoderGroup_);
+    
+    // Create input field with hex validator
+    QLabel* inputLabel = new QLabel("24-bit Address (Hex):", addressEncoderGroup_);
+    addressInput_ = new QLineEdit(addressEncoderGroup_);
+    addressInput_->setPlaceholderText("000000");
+    
+    // Connect to textChanged to filter input (allows pasting with spaces)
+    connect(addressInput_, &QLineEdit::textChanged, this, [this](const QString& text) {
+        // Remove all non-hex characters (including spaces)
+        QString filtered = text;
+        filtered.remove(QRegularExpression("[^0-9A-Fa-f]"));
+        
+        // Limit to 6 characters
+        if (filtered.length() > 6) {
+            filtered = filtered.left(6);
+        }
+        
+        // Update only if different (to avoid infinite loop)
+        if (filtered != text) {
+            int cursorPos = addressInput_->cursorPosition();
+            addressInput_->setText(filtered);
+            addressInput_->setCursorPosition(qMin(cursorPos, filtered.length()));
+        }
+    });
+    
+    // Create encode and decode buttons
+    QHBoxLayout* buttonLayout = new QHBoxLayout();
+    encodeButton_ = new QPushButton("Encode", addressEncoderGroup_);
+    decodeButton_ = new QPushButton("Decode", addressEncoderGroup_);
+    connect(encodeButton_, &QPushButton::clicked, this, &MainWindow::onEncodeAddress);
+    connect(decodeButton_, &QPushButton::clicked, this, &MainWindow::onDecodeAddress);
+    
+    buttonLayout->addWidget(encodeButton_);
+    buttonLayout->addWidget(decodeButton_);
+    
+    // Allow Enter key to trigger encoding
+    connect(addressInput_, &QLineEdit::returnPressed, this, &MainWindow::onEncodeAddress);
+    
+    // Layout
+    encoderLayout->addWidget(inputLabel);
+    encoderLayout->addWidget(addressInput_);
+    encoderLayout->addLayout(buttonLayout);
+    encoderLayout->addStretch();
+    
+    addressEncoderGroup_->setMaximumWidth(250);
+    
+    return addressEncoderGroup_;
+}           
+
+uint32_t coeffs[] = {
+    0x00ffff,
+    0xfe0002,
+    0x03fffc,
+    0x07fff8,
+    0x0ffff0,
+    0xe00020,
+    0xc00040,
+    0x800080,
+    0x000100,
+    0xfffe00,
+    0x000400,
+    0x000800,
+    0x001000,
+    0x002000,
+    0x004000,
+    0x008000,
+    0xff0000,
+    0x020000,
+    0xfc0000,
+    0xf80000,
+    0xf00000,
+    0x200000,
+    0x400000,
+    0x800000,
+};
+
+void MainWindow::onEncodeAddress()
+{
+    QString addressText = addressInput_->text().trimmed();
+    
+    if (addressText.isEmpty()) {
+        QMessageBox::warning(this, "Invalid Input", "Please enter a 24-bit hexadecimal address.");
+        return;
+    }
+    
+    // Pad with leading zeros if needed
+    addressText = addressText.rightJustified(6, '0');
+    
+    // Parse hex value
+    bool ok;
+    uint32_t address = addressText.toUInt(&ok, 16);
+    
+    if (!ok || address > 0xFFFFFF) {
+        QMessageBox::warning(this, "Invalid Input", "Please enter a valid 24-bit hexadecimal address (000000-FFFFFF).");
+        return;
+    }
+    
+    uint32_t encodedValue{};
+    address -= 0x21d;
+    for (int i = 0; i < 24; ++i)
+    {
+        if (address & (1u << i))
+        {
+            encodedValue |= (1 << i);
+            address -= coeffs[i];
+        }
+    }
+
+    std::swap(((uint8_t*)&encodedValue)[0], ((uint8_t*)&encodedValue)[2]);
+    
+    // Update the input field with encoded value
+    QString encodedText = QString("%1").arg(encodedValue, 6, 16, QChar('0')).toUpper();
+    addressInput_->setText(encodedText);
+    
+    // Log the encoding
+    logMessage(QString("Encoded address: 0x%1 -> 0x%2")
+              .arg(addressText.toUpper())
+              .arg(encodedText));
+    
+    updateStatusBar(QString("Address encoded: 0x%1").arg(encodedText));
+}
+
+void MainWindow::onDecodeAddress()
+{
+    QString addressText = addressInput_->text().trimmed();
+    
+    if (addressText.isEmpty()) {
+        QMessageBox::warning(this, "Invalid Input", "Please enter a 24-bit hexadecimal address.");
+        return;
+    }
+    
+    // Pad with leading zeros if needed
+    addressText = addressText.rightJustified(6, '0');
+    
+    // Parse hex value
+    bool ok;
+    uint32_t encodedAddress = addressText.toUInt(&ok, 16);
+    
+    if (!ok || encodedAddress > 0xFFFFFF) {
+        QMessageBox::warning(this, "Invalid Input", "Please enter a valid 24-bit hexadecimal address (000000-FFFFFF).");
+        return;
+    }
+
+    std::swap(((uint8_t*)&encodedAddress)[0], ((uint8_t*)&encodedAddress)[2]);
+    uint32_t decodedValue{ 0x21d };
+    for (int i = 0; i < 24; ++i)
+        if (encodedAddress & (1 << i))
+            decodedValue += coeffs[i];
+
+    decodedValue &= 0xffffff;
+    
+    // Update the input field with decoded value
+    QString decodedText = QString("%1").arg(decodedValue, 6, 16, QChar('0')).toUpper();
+    addressInput_->setText(decodedText);
+    
+    // Log the decoding
+    logMessage(QString("Decoded address: 0x%1 -> 0x%2")
+              .arg(addressText.toUpper())
+              .arg(decodedText));
+    
+    updateStatusBar(QString("Address decoded: 0x%1").arg(decodedText));
 }

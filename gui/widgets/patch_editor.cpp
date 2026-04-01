@@ -17,27 +17,27 @@ namespace gui {
 
 PatchModel::PatchModel(QObject* parent)
     : QAbstractTableModel(parent)
-    , patchManager_(nullptr)
+    , patches_(nullptr)
 {
 }
 
-void PatchModel::setPatchManager(rebear::PatchManager* manager) {
-    patchManager_ = manager;
+void PatchModel::setPatches(std::vector<rebear::Patch>* patches) {
+    patches_ = patches;
     refresh();
 }
 
 void PatchModel::refresh() {
     beginResetModel();
-    patches_.clear();
-    if (patchManager_) {
-        patches_ = patchManager_->getPatches();
+    patchCache_.clear();
+    if (patches_) {
+        patchCache_ = *patches_;
     }
     endResetModel();
 }
 
 const rebear::Patch* PatchModel::getPatch(int row) const {
-    if (row >= 0 && row < static_cast<int>(patches_.size())) {
-        return &patches_[row];
+    if (row >= 0 && row < static_cast<int>(patchCache_.size())) {
+        return &patchCache_[row];
     }
     return nullptr;
 }
@@ -46,7 +46,7 @@ int PatchModel::rowCount(const QModelIndex& parent) const {
     if (parent.isValid()) {
         return 0;
     }
-    return patches_.size();
+    return patchCache_.size();
 }
 
 int PatchModel::columnCount(const QModelIndex& parent) const {
@@ -57,11 +57,11 @@ int PatchModel::columnCount(const QModelIndex& parent) const {
 }
 
 QVariant PatchModel::data(const QModelIndex& index, int role) const {
-    if (!index.isValid() || index.row() >= static_cast<int>(patches_.size())) {
+    if (!index.isValid() || index.row() >= static_cast<int>(patchCache_.size())) {
         return QVariant();
     }
 
-    const auto& patch = patches_[index.row()];
+    const auto& patch = patchCache_[index.row()];
 
     if (role == Qt::DisplayRole) {
         switch (index.column()) {
@@ -297,7 +297,7 @@ void PatchDialog::validateAndAccept() {
 
 PatchEditor::PatchEditor(QWidget* parent)
     : QWidget(parent)
-    , patchManager_(nullptr)
+    , patches_(nullptr)
 {
     setupUi();
 }
@@ -322,16 +322,12 @@ void PatchEditor::setupUi() {
     btnRemove_ = new QPushButton("Remove", this);
     btnApplyAll_ = new QPushButton("Apply All", this);
     btnClearAll_ = new QPushButton("Clear All", this);
-    btnLoad_ = new QPushButton("Load", this);
-    btnSave_ = new QPushButton("Save", this);
 
     connect(btnAdd_, &QPushButton::clicked, this, &PatchEditor::onAddClicked);
     connect(btnEdit_, &QPushButton::clicked, this, &PatchEditor::onEditClicked);
     connect(btnRemove_, &QPushButton::clicked, this, &PatchEditor::onRemoveClicked);
     connect(btnApplyAll_, &QPushButton::clicked, this, &PatchEditor::onApplyAllClicked);
     connect(btnClearAll_, &QPushButton::clicked, this, &PatchEditor::onClearAllClicked);
-    connect(btnLoad_, &QPushButton::clicked, this, &PatchEditor::onLoadClicked);
-    connect(btnSave_, &QPushButton::clicked, this, &PatchEditor::onSaveClicked);
 
     // Layout buttons
     QHBoxLayout* buttonLayout = new QHBoxLayout();
@@ -339,8 +335,6 @@ void PatchEditor::setupUi() {
     buttonLayout->addWidget(btnEdit_);
     buttonLayout->addWidget(btnRemove_);
     buttonLayout->addStretch();
-    buttonLayout->addWidget(btnLoad_);
-    buttonLayout->addWidget(btnSave_);
     buttonLayout->addWidget(btnApplyAll_);
     buttonLayout->addWidget(btnClearAll_);
 
@@ -354,9 +348,9 @@ void PatchEditor::setupUi() {
     setLayout(mainLayout);
 }
 
-void PatchEditor::setPatchManager(rebear::PatchManager* manager) {
-    patchManager_ = manager;
-    model_->setPatchManager(manager);
+void PatchEditor::setPatches(std::vector<rebear::Patch>* patches) {
+    patches_ = patches;
+    model_->setPatches(patches);
 }
 
 void PatchEditor::refresh() {
@@ -364,25 +358,25 @@ void PatchEditor::refresh() {
 }
 
 void PatchEditor::onAddClicked() {
-    if (!patchManager_) {
+    if (!patches_) {
         return;
     }
 
     PatchDialog dialog(this);
     if (dialog.exec() == QDialog::Accepted) {
         rebear::Patch patch = dialog.getPatch();
-        if (patchManager_->addPatch(patch)) {
+        if (patch.isValid()) {
+            patches_->push_back(patch);
             refresh();
             emit patchesChanged();
         } else {
-            QMessageBox::warning(this, "Error", 
-                QString::fromStdString(patchManager_->getLastError()));
+            QMessageBox::warning(this, "Error", "Invalid patch data");
         }
     }
 }
 
 void PatchEditor::onEditClicked() {
-    if (!patchManager_) {
+    if (!patches_) {
         return;
     }
 
@@ -400,21 +394,25 @@ void PatchEditor::onEditClicked() {
     PatchDialog dialog(this);
     dialog.setPatch(*patch);
     if (dialog.exec() == QDialog::Accepted) {
-        // Remove old patch and add new one
-        patchManager_->removePatch(patch->id);
         rebear::Patch newPatch = dialog.getPatch();
-        if (patchManager_->addPatch(newPatch)) {
+        if (newPatch.isValid()) {
+            // Find and replace in the actual vector
+            for (auto& p : *patches_) {
+                if (p.id == patch->id && p.address == patch->address) {
+                    p = newPatch;
+                    break;
+                }
+            }
             refresh();
             emit patchesChanged();
         } else {
-            QMessageBox::warning(this, "Error", 
-                QString::fromStdString(patchManager_->getLastError()));
+            QMessageBox::warning(this, "Error", "Invalid patch data");
         }
     }
 }
 
 void PatchEditor::onRemoveClicked() {
-    if (!patchManager_) {
+    if (!patches_) {
         return;
     }
 
@@ -429,13 +427,15 @@ void PatchEditor::onRemoveClicked() {
         return;
     }
 
-    if (patchManager_->removePatch(patch->id)) {
-        refresh();
-        emit patchesChanged();
-    } else {
-        QMessageBox::warning(this, "Error", 
-            QString::fromStdString(patchManager_->getLastError()));
+    // Find and remove from the actual vector
+    for (auto it = patches_->begin(); it != patches_->end(); ++it) {
+        if (it->id == patch->id && it->address == patch->address) {
+            patches_->erase(it);
+            break;
+        }
     }
+    refresh();
+    emit patchesChanged();
 }
 
 void PatchEditor::onApplyAllClicked() {
@@ -444,50 +444,6 @@ void PatchEditor::onApplyAllClicked() {
 
 void PatchEditor::onClearAllClicked() {
     emit clearAllRequested();
-}
-
-void PatchEditor::onLoadClicked() {
-    if (!patchManager_) {
-        return;
-    }
-
-    QString filename = QFileDialog::getOpenFileName(this, "Load Patches", 
-        "", "JSON Files (*.json);;All Files (*)");
-    
-    if (filename.isEmpty()) {
-        return;
-    }
-
-    if (patchManager_->loadFromFile(filename.toStdString())) {
-        refresh();
-        emit patchesChanged();
-        QMessageBox::information(this, "Success", 
-            QString("Loaded %1 patches").arg(model_->rowCount()));
-    } else {
-        QMessageBox::warning(this, "Error", 
-            QString::fromStdString(patchManager_->getLastError()));
-    }
-}
-
-void PatchEditor::onSaveClicked() {
-    if (!patchManager_) {
-        return;
-    }
-
-    QString filename = QFileDialog::getSaveFileName(this, "Save Patches", 
-        "", "JSON Files (*.json);;All Files (*)");
-    
-    if (filename.isEmpty()) {
-        return;
-    }
-
-    if (patchManager_->saveToFile(filename.toStdString())) {
-        QMessageBox::information(this, "Success", 
-            QString("Saved %1 patches").arg(model_->rowCount()));
-    } else {
-        QMessageBox::warning(this, "Error", 
-            QString::fromStdString(patchManager_->getLastError()));
-    }
 }
 
 void PatchEditor::onTableDoubleClicked(const QModelIndex& index) {

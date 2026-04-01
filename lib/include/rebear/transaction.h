@@ -116,17 +116,6 @@ public:
      * @return true if transaction appears to be dummy data (all 0xFF)
      */
     bool isDummy() const;
-    
-    /**
-     * @brief Check if transaction was patched by the FPGA.
-     *
-     * When the FPGA actively patches a transaction, it does NOT count the
-     * actual data being read. In this case, the count field will be 0xFFFFFF,
-     * indicating that a patch was applied and the actual byte count is unknown.
-     *
-     * @return true if count is 0xFFFFFF (patch was applied)
-     */
-    bool isPatched() const;
 };
 
 } // namespace rebear
